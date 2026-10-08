@@ -47,11 +47,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s phase2-input/google-built.config
-          test -s phase2-input/halium-report.md
-          grep -q 'Examined compiled Google kernel config: **YES**' phase2-input/halium-report.md
-          grep -q 'CONFIG_PID_NS' phase2-input/google-built.config
-          echo "Phase 2 build inputs found. No compilation or hardware access."
+          echo "Downloaded artifact members:"
+          find phase2-input -maxdepth 3 -type f -printf '%p (%s bytes)\n' | sort
+          for file in phase2-input/google-built.config phase2-input/halium-report.md; do
+            if [[ ! -s "$file" ]]; then
+              echo "::error::Missing or empty Phase 2 input: $file"
+              exit 1
+            fi
+          done
+          if ! grep -Fq 'Examined compiled Google kernel config: **YES**' phase2-input/halium-report.md; then
+            echo "::error::Artifact does not contain a real compiled kernel config report"
+            exit 1
+          fi
+          if ! grep -Fq 'CONFIG_PID_NS' phase2-input/google-built.config; then
+            echo "::error::Kernel .config lacks expected PID namespace symbol"
+            exit 1
+          fi
+          echo "Phase 2 build inputs verified. No compilation or hardware access."
 
       - name: Classify settings using actual compiled Google .config
         shell: bash
