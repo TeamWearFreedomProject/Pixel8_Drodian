@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get install -y --no-install-recommends \
-            mmdebstrap qemu-user-static binfmt-support debian-archive-keyring xz-utils file
+            mmdebstrap arch-test qemu-user-static binfmt-support debian-archive-keyring xz-utils file
           # GitHub runners can have qemu-aarch64 registered in the kernel
           # by a mechanism other than the update-binfmts package database.
           # The --display subcommand may fail even when QEMU works.
