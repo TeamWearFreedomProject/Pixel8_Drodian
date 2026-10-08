@@ -1,0 +1,122 @@
+name: Droidian Phase 5 - ARM64 rootfs foundation (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preflight: inspect Droidian dependencies; bootstrap: additionally build a real Debian arm64 rootfs"
+        type: choice
+        required: true
+        default: bootstrap
+        options:
+          - preflight
+          - bootstrap
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shiba-rootfs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rootfs:
+    name: ARM64 rootfs research / ${{ inputs.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout Pixel 8 project
+        uses: actions/checkout@v4
+
+      - name: Install source audit tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git python3 python3-yaml
+          python3 -m py_compile scripts/phase5_rootfs_readiness.py
+
+      - name: Get upstream Droidian image and rootfs sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p sources
+          git clone -q --depth=1 https://github.com/droidian-images/droidian.git sources/droidian-images
+          git clone -q --depth=1 https://github.com/droidian-releng/rootfs-templates.git sources/rootfs-templates
+          git clone -q --depth=1 https://github.com/droidian/android-system-gsi-34-bin.git sources/android-system-gsi-34-bin
+
+      - name: Check Android API and Droidian rootfs dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/phase5_rootfs_readiness.py --sources sources --output PHASE5_READINESS.md
+          cat PHASE5_READINESS.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install ARM64 bootstrap tools
+        if: inputs.mode == 'bootstrap'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get install -y --no-install-recommends \
+            mmdebstrap qemu-user-static binfmt-support debian-archive-keyring xz-utils file
+          sudo update-binfmts --enable qemu-aarch64
+          update-binfmts --display qemu-aarch64
+          df -h /
+
+      - name: Build authentic Debian arm64 base filesystem (NOT Droidian)
+        if: inputs.mode == 'bootstrap'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          root="$RUNNER_TEMP/debian-arm64-rootfs"
+          mkdir -p "$root"
+          sudo mmdebstrap --mode=root --architectures=arm64 \
+            --variant=minbase --components=main \
+            --include=apt,ca-certificates \
+            trixie "$root" https://deb.debian.org/debian \
+            2>&1 | tee "$GITHUB_WORKSPACE/bootstrap.log"
+          test -s "$root/etc/os-release"
+          test -x "$root/usr/bin/dpkg"
+          test -x "$root/bin/sh"
+          arch="$(sudo chroot "$root" /usr/bin/dpkg --print-architecture)"
+          test "$arch" = arm64
+          grep -q "trixie" "$root/etc/os-release"
+          echo "ROOTFS_ARCHITECTURE=$arch" >> "$GITHUB_ENV"
+          sudo chroot "$root" /usr/bin/dpkg-query -W -f='${binary:Package} ${Version}\n' \
+            > "$GITHUB_WORKSPACE/debian-arm64-package-list.txt"
+          sudo tar -C "$root" --numeric-owner -cJf \
+            "$GITHUB_WORKSPACE/debian-arm64-minbase-TRIXIE-NOT-DROIDIAN.tar.xz" .
+          sha256sum debian-arm64-minbase-TRIXIE-NOT-DROIDIAN.tar.xz \
+            | tee debian-arm64-sha256.txt
+          cat > PHASE5_BASE_ROOTFS_RESULT.md <<'EOF'
+          # ARM64 Linux base rootfs experiment
+          
+          **UNVERIFIED — NOT DROIDIAN — NOT BOOTABLE — DO NOT FLASH**
+          
+          Debian trixie minbase filesystem was constructed with mmdebstrap.
+          Its Debian package database reports architecture `arm64`,
+          and package metadata was exported.
+          
+          This does NOT contain the Droidian Phosh UI, Halium initramfs,
+          Android container, Pixel 8 adaptation, vendor drivers or boot partitions.
+          
+          The tarball is intended solely for build/packaging research.
+          EOF
+          cat PHASE5_BASE_ROOTFS_RESULT.md >> "$GITHUB_STEP_SUMMARY"
+          du -h debian-arm64-minbase-TRIXIE-NOT-DROIDIAN.tar.xz
+          df -h /
+
+      - name: Save research report and rootfs artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-phase5-${{ inputs.mode }}-${{ github.run_number }}
+          path: |
+            PHASE5_READINESS.md
+            PHASE5_BASE_ROOTFS_RESULT.md
+            debian-arm64-sha256.txt
+            debian-arm64-package-list.txt
+            debian-arm64-minbase-TRIXIE-NOT-DROIDIAN.tar.xz
+            bootstrap.log
+          if-no-files-found: warn
+          retention-days: 7
