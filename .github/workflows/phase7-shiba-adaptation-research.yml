@@ -90,7 +90,7 @@ jobs:
             --deb "packages/$deb" --installed-root "$root"
           sudo chroot "$root" /usr/bin/dpkg-query \
             -W -f='${Package} ${Version} ${Architecture} ${Status}\n' \
-            adaptation-google-shiba-research | tee PHASE7_${Status}.txt
+            adaptation-google-shiba-research | tee PHASE7_DPKG_STATUS.txt
           {
             echo '# Phase 7 — shiba research adaptation package'
             echo
@@ -117,6 +117,6 @@ jobs:
             packages/adaptation-google-shiba-research_0.1.0_arm64.deb
             PHASE7_RESULT.md
             PHASE7_PACKAGE_SHA256.txt
-            PHASE7_${Status}.txt
+            PHASE7_DPKG_STATUS.txt
           if-no-files-found: warn
           retention-days: 30
