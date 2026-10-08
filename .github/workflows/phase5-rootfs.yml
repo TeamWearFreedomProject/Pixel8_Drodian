@@ -59,8 +59,16 @@ jobs:
           set -euxo pipefail
           sudo apt-get install -y --no-install-recommends \
             mmdebstrap qemu-user-static binfmt-support debian-archive-keyring xz-utils file
-          sudo update-binfmts --enable qemu-aarch64
-          update-binfmts --display qemu-aarch64
+          # GitHub runners can have qemu-aarch64 registered in the kernel
+          # by a mechanism other than the update-binfmts package database.
+          # The --display subcommand may fail even when QEMU works.
+          sudo update-binfmts --enable qemu-aarch64 || true
+          if [[ -r /proc/sys/fs/binfmt_misc/qemu-aarch64 ]]; then
+            cat /proc/sys/fs/binfmt_misc/qemu-aarch64
+          else
+            echo "::notice::No qemu-aarch64 entry exposed in binfmt_misc; mmdebstrap will provide definitive validation."
+          fi
+          command -v qemu-aarch64-static
           df -h /
 
       - name: Build authentic Debian arm64 base filesystem (NOT Droidian)
