@@ -1,0 +1,73 @@
+name: Droidian Phase 3 - Classify kernel differences (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase2_run_id:
+        description: "Phase 2 config-build workflow run ID holding the .config artifact"
+        required: true
+        default: "37724909814"
+        type: string
+      phase2_artifact:
+        description: "Phase 2 config-build artifact name"
+        required: true
+        default: "halium-readiness-config-build-2"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  triage:
+    name: Inspect existing build output (NO recompile)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout project scripts
+        uses: actions/checkout@v4
+
+      - name: Validate Phase 3 parser
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/triage_halium.py
+          python3 scripts/triage_halium.py --self-test
+
+      - name: Download existing Phase 2 artifacts from this repository
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.phase2_artifact }}
+          run-id: ${{ inputs.phase2_run_id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: phase2-input
+
+      - name: Verify inputs came from the Phase 2 config-build
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s phase2-input/google-built.config
+          test -s phase2-input/halium-report.md
+          grep -q 'Examined compiled Google kernel config: **YES**' phase2-input/halium-report.md
+          grep -q 'CONFIG_PID_NS' phase2-input/google-built.config
+          echo "Phase 2 build inputs found. No compilation or hardware access."
+
+      - name: Classify settings using actual compiled Google .config
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/triage_halium.py \
+            --phase2-report phase2-input/halium-report.md \
+            --kernel-config phase2-input/google-built.config \
+            --output phase3-triage.md
+          cat phase3-triage.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save classification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-phase3-halium-triage-${{ github.run_number }}
+          path: phase3-triage.md
+          if-no-files-found: warn
+          retention-days: 30
