@@ -32,3 +32,19 @@ bootstrap remain successful independent steps. The fully integrated Droidian
 userspace + Halium + Pixel 8 adaptation remains **unbuilt and untested**.
 
 **BUILD ONLY / NO DEVICE ACCESS / DO NOT FLASH.**
+
+## Phase 6 #2 — GitHub official release inventory succeeded
+
+- Workflow: [run #2](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/37763725021)
+- Status: **success**, about 23 seconds; `release-inventory` mode
+- Report artifact: `shiba-phase6-release-inventory-2`, expires **2026-10-15 10:29 UTC**
+- Official nightly published **2026-10-07 04:52 UTC**.
+- Official generic Android API image versions listed: **28, 29, 30, 32, 33**.
+- **No API 34 image**, and **no Pixel 8 shiba image** in that release.
+- Generic Phosh zip images are approximately **1.4 GiB** apiece.
+- No actual Droidian rootfs was built by this `release-inventory` run.
+- Success of the GitHub releases metadata query **does not** prove the separate
+  Droidian signed APT package server is restored or usable.
+
+The target remains: independently signed official Droidian userspace,
+verified matching Pixel 8 vendor ABI/API, and a shiba-specific adaptation.
