@@ -4,12 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "audit: check official sources; base: try building a genuine Droidian base rootfs"
+        description: "audit: upstream sources; release-inventory: official nightly assets; base: signed rootfs"
         type: choice
         required: true
         default: base
         options:
           - audit
+          - release-inventory
           - base
 
 permissions:
@@ -51,6 +52,39 @@ jobs:
           set -euxo pipefail
           python3 scripts/audit_droidian_phase6.py --sources sources --output PHASE6_UPSTREAM_AUDIT.md
           cat PHASE6_UPSTREAM_AUDIT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Inspect available official GitHub nightly (small metadata only)
+        if: ${{ inputs.mode == 'release-inventory' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 2 --connect-timeout 10 --max-time 60 \
+            -H 'Accept: application/vnd.github+json' \
+            https://api.github.com/repos/droidian-images/droidian/releases/tags/nightly \
+            -o upstream-nightly.json
+          python3 scripts/phase6_official_release_inventory.py \
+            --release-json upstream-nightly.json \
+            --output PHASE6_OFFICIAL_NIGHTLY.md
+          cat PHASE6_OFFICIAL_NIGHTLY.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify official snapshot is online before bootstrapping
+        if: ${{ inputs.mode == 'base' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="$DROIDIAN_MIRROR/dists/rolling/InRelease"
+          echo "Checking Droidian's official signed snapshot: $url"
+          if ! curl -fsSL --retry 1 --connect-timeout 8 --max-time 30 \
+            "$url" -o "$RUNNER_TEMP/droidian-InRelease"; then
+            echo "::error::The official Droidian snapshot server is currently unreachable. This is an upstream network problem, not a kernel failure."
+            echo "::notice::Use mode=release-inventory to inspect official GitHub images, or retry base when the signed snapshot server recovers."
+            exit 1
+          fi
+          if ! grep -Fq -- '-----BEGIN PGP SIGNED MESSAGE-----' "$RUNNER_TEMP/droidian-InRelease"; then
+            echo "::error::Snapshot response does not look like an InRelease signed metadata file"
+            exit 1
+          fi
+          echo "Server reachable. mmdebstrap will verify signatures using the upstream GPG key."
 
       - name: Bootstrap signed Droidian rolling ARM64 rootfs
         if: ${{ inputs.mode == 'base' }}
@@ -132,6 +166,7 @@ jobs:
           name: shiba-phase6-${{ inputs.mode }}-${{ github.run_number }}
           path: |
             PHASE6_UPSTREAM_AUDIT.md
+            PHASE6_OFFICIAL_NIGHTLY.md
             PHASE6_BUILD_RESULT.md
             droidian-package-list.txt
             droidian-package-policy.txt
