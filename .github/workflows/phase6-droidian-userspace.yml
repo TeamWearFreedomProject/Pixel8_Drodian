@@ -53,7 +53,7 @@ jobs:
           cat PHASE6_UPSTREAM_AUDIT.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Bootstrap signed Droidian rolling ARM64 rootfs
-        if: ${{ inputs.mode }} == 'base'
+        if: ${{ inputs.mode == 'base' }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -78,7 +78,7 @@ jobs:
           echo "DROIDIAN_ROOT=$root" >> "$GITHUB_ENV"
 
       - name: Install upstream Droidian metapackages (no Phosh yet)
-        if: ${{ inputs.mode }} == 'base'
+        if: ${{ inputs.mode == 'base' }}
         shell: bash
         run: |
           set -euxo pipefail
@@ -96,7 +96,7 @@ jobs:
             2>&1 | tee apt-droidian-base.log
 
       - name: Validate and archive genuine Droidian base
-        if: ${{ inputs.mode }} == 'base'
+        if: ${{ inputs.mode == 'base' }}
         shell: bash
         run: |
           set -euxo pipefail
