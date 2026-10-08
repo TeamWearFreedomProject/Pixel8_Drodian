@@ -1,0 +1,122 @@
+name: Droidian Phase 7 - Shiba adaptation research package (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: shiba-phase7-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  adaptation-research:
+    name: Build arm64 research .deb and test in Debian chroot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Validate packaging and verification scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/phase7_build_adaptation_research.py
+          python3 -m py_compile scripts/phase7_verify_package.py
+
+      - name: Install package and ARM64 chroot tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            dpkg-dev qemu-user-static binfmt-support xz-utils
+          command -v dpkg-deb
+          command -v qemu-aarch64-static
+
+      - name: Build inert Pixel 8 shiba adaptation research .deb
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/phase7_build_adaptation_research.py --output-dir packages
+          deb="packages/adaptation-google-shiba-research_0.1.0_arm64.deb"
+          test -s "$deb"
+          dpkg-deb --field "$deb"
+          dpkg-deb --contents "$deb"
+          python3 scripts/phase7_verify_package.py --deb "$deb"
+          sha256sum "$deb" | tee PHASE7_PACKAGE_SHA256.txt
+
+      - name: Download previous successful ARM64 Debian base (Phase 5)
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 37760550966
+          name: shiba-phase5-bootstrap-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          path: baseline
+
+      - name: Validate Phase 5 provenance and extract into disposable CI rootfs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s baseline/debian-arm64-minbase-TRIXIE-NOT-DROIDIAN.tar.xz
+          test -s baseline/debian-arm64-sha256.txt
+          cd baseline
+          sha256sum -c debian-arm64-sha256.txt
+          root="$RUNNER_TEMP/shiba-research-test-root"
+          mkdir -p "$root"
+          sudo tar -xJf debian-arm64-minbase-TRIXIE-NOT-DROIDIAN.tar.xz -C "$root"
+          test -s "$root/etc/os-release"
+          test -x "$root/usr/bin/dpkg"
+          echo "SHIBA_TEST_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Install and test the data-only Debian package in ARM64 chroot
+        shell: bash
+        run: |
+          set -euxo pipefail
+          root="$SHIBA_TEST_ROOT"
+          deb="adaptation-google-shiba-research_0.1.0_arm64.deb"
+          arch="$(sudo chroot "$root" /usr/bin/dpkg --print-architecture)"
+          test "$arch" = arm64
+          sudo cp "packages/$deb" "$root/tmp/$deb"
+          sudo chroot "$root" /usr/bin/dpkg --install "/tmp/$deb"
+          installed="$(sudo chroot "$root" /usr/bin/dpkg-query \
+            -W -f='${Status}' adaptation-google-shiba-research)"
+          test "$installed" = 'install ok installed'
+          python3 scripts/phase7_verify_package.py \
+            --deb "packages/$deb" --installed-root "$root"
+          sudo chroot "$root" /usr/bin/dpkg-query \
+            -W -f='${Package} ${Version} ${Architecture} ${Status}\n' \
+            adaptation-google-shiba-research | tee PHASE7_${Status}.txt
+          {
+            echo '# Phase 7 — shiba research adaptation package'
+            echo
+            echo '**SUCCESS: data-only ARM64 Debian package built and installed in a disposable CI rootfs.**'
+            echo
+            echo '- This is NOT a functioning Droidian adaptation.'
+            echo '- The package contains exactly one research JSON file and one README.'
+            echo '- No initramfs, kernel, GSI, firmware or boot components included.'
+            echo '- No maintainer scripts, udev rules or system services.'
+            echo '- No Pixel 8 hardware access; no boot or flash validation.'
+            echo "- Verified architecture: $arch"
+            echo "- dpkg state: $installed"
+            echo
+            echo '**DO NOT INSTALL ON THE PHONE. BUILD ONLY.**'
+          } | tee PHASE7_RESULT.md
+          cat PHASE7_RESULT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save package, manifest and verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-phase7-research-package-${{ github.run_number }}
+          path: |
+            packages/adaptation-google-shiba-research_0.1.0_arm64.deb
+            PHASE7_RESULT.md
+            PHASE7_PACKAGE_SHA256.txt
+            PHASE7_${Status}.txt
+          if-no-files-found: warn
+          retention-days: 30
