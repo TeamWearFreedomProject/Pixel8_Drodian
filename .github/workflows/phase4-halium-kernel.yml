@@ -1,0 +1,141 @@
+name: Droidian Phase 4 - Source-built Halium kernel (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: shiba-halium-source-kernel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source-kernel:
+    name: Compile experimental Pixel 8 Halium kernel (NO DEVICE)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      SRC: ${{ github.workspace }}/google-kernel
+      MANIFEST_BRANCH: android-gs-shusky-6.1-android16
+    steps:
+      - name: Checkout build-only scripts
+        uses: actions/checkout@v4
+
+      - name: Check Python analysis script syntax
+        run: python3 -m py_compile scripts/check_phase4_config.py
+
+      - name: Download real baseline config from Phase 2
+        uses: actions/download-artifact@v4
+        with:
+          name: halium-readiness-config-build-2
+          run-id: 37724909814
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: phase2-input
+
+      - name: Verify baseline build config
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s phase2-input/google-built.config
+          grep -Fq 'CONFIG_PID_NS' phase2-input/google-built.config
+          grep -Fq 'CONFIG_MODULE_SIG_PROTECT' phase2-input/google-built.config
+          echo "Google Pixel 8 baseline found."
+
+      - name: Prepare Google kernel build runner
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/.ghcup || true
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bc bison build-essential ca-certificates cpio curl dwarves file flex git libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils zip zstd
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          df -h /
+
+      - name: Sync official Google shusky source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$SRC"
+          cd "$SRC"
+          "$HOME/bin/repo" init --depth=1 -u https://android.googlesource.com/kernel/manifest -b "$MANIFEST_BRANCH"
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle 2>&1 | tee "$GITHUB_WORKSPACE/sync.log"
+          "$HOME/bin/repo" manifest -r -o "$GITHUB_WORKSPACE/google-source-manifest.xml"
+          test -f build_shusky.sh
+          test -f private/devices/google/common/debug/debug.bazelrc
+          test -f private/devices/google/common/debug/BUILD.bazel
+          df -h /
+
+      - name: Add minimal, BUILD ONLY Halium Kconfig fragment
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SRC"
+          config_dir="private/devices/google/common/debug"
+          # This configuration is ONLY a proposal, and does not relax module
+          # signing, SELinux or boot verification. Review risks before any test.
+          cat > "$config_dir/droidian_halium_min_defconfig" <<'EOF'
+          CONFIG_DEVTMPFS=y
+          CONFIG_VT=y
+          CONFIG_SYSVIPC=y
+          CONFIG_PID_NS=y
+          CONFIG_IPC_NS=y
+          CONFIG_UTS_NS=y
+          CONFIG_USER_NS=y
+          CONFIG_SQUASHFS=y
+          EOF
+          # Verify this build uses exported *_defconfig source labels.
+          grep -Fq 'exports_files' "$config_dir/BUILD.bazel"
+          cp "$config_dir/droidian_halium_min_defconfig" "$GITHUB_WORKSPACE/requested-halium-fragment.config"
+          cat >> "$config_dir/debug.bazelrc" <<'EOF'
+          build:droidian_halium_min --config=pixel_debug_common
+          build:droidian_halium_min --defconfig_fragment=//private/devices/google/common/debug:droidian_halium_min_defconfig
+          EOF
+          echo "Only isolated Google runner source was changed, never the user's phone."
+          cat "$GITHUB_WORKSPACE/requested-halium-fragment.config"
+
+      - name: Build GKI from source plus shusky vendor components
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SRC"
+          # --config=pixel_debug_common forces source GKI instead of default prebuilt.
+          # Do not upload firmware images: a successful build is NOT boot validation.
+          parameters="--kernel_package=@//aosp" bash ./build_shusky.sh --config=droidian_halium_min --lto=none 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          test -s out/shusky/dist/.config
+          cp out/shusky/dist/.config "$GITHUB_WORKSPACE/halium-candidate.config"
+          find out/shusky/dist -maxdepth 1 -type f -printf '%f %s bytes\n' | sort > "$GITHUB_WORKSPACE/build-file-list.txt"
+          df -h /
+
+      - name: Validate built Kconfig against Phase 2 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_phase4_config.py \
+            --baseline phase2-input/google-built.config \
+            --candidate halium-candidate.config \
+            --fragment requested-halium-fragment.config \
+            --output PHASE4_CONFIG_REPORT.md
+          cat PHASE4_CONFIG_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build diagnostics, NEVER boot images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-phase4-kernel-diagnostics-${{ github.run_number }}
+          path: |
+            PHASE4_CONFIG_REPORT.md
+            requested-halium-fragment.config
+            halium-candidate.config
+            google-source-manifest.xml
+            build-file-list.txt
+            sync.log
+            build.log
+          if-no-files-found: warn
+          retention-days: 7
