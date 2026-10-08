@@ -1,0 +1,146 @@
+name: Droidian Phase 6 - Signed Droidian ARM64 base (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "audit: check official sources; base: try building a genuine Droidian base rootfs"
+        type: choice
+        required: true
+        default: base
+        options:
+          - audit
+          - base
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    name: Official Droidian ARM64 / ${{ inputs.mode }}
+    env:
+      DROIDIAN_MIRROR: https://releases.droidian.org/snapshots/current
+    steps:
+      - name: Checkout scripts
+        uses: actions/checkout@v4
+
+      - name: Install cross-arch build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git python3 python3-yaml \
+            ca-certificates mmdebstrap arch-test qemu-user-static binfmt-support \
+            debian-archive-keyring xz-utils gpg file
+          python3 -m py_compile scripts/audit_droidian_phase6.py
+
+      - name: Fetch official Droidian sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p sources
+          git clone -q --depth=1 https://github.com/droidian-images/droidian.git sources/droidian-images
+          git clone -q --depth=1 https://github.com/droidian-releng/rootfs-templates.git sources/rootfs-templates
+          git clone -q --depth=1 https://github.com/droidian/android-system-gsi-34-bin.git sources/android-system-gsi-34-bin
+
+      - name: Audit official rootfs and API dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/audit_droidian_phase6.py --sources sources --output PHASE6_UPSTREAM_AUDIT.md
+          cat PHASE6_UPSTREAM_AUDIT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bootstrap signed Droidian rolling ARM64 rootfs
+        if: ${{ inputs.mode }} == 'base'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          root="$RUNNER_TEMP/droidian-arm64"
+          key="$GITHUB_WORKSPACE/sources/rootfs-templates/apt/etc/apt/trusted.gpg.d/droidian-bootstrap.gpg"
+          test -s "$key"
+          mkdir -p "$root"
+          # Use the official signed Droidian snapshot; do not bypass signature checks.
+          sudo mmdebstrap --mode=root --architectures=arm64 \
+            --variant=minbase --components=main --keyring="$key" \
+            --include=apt,ca-certificates \
+            rolling "$root" "$DROIDIAN_MIRROR" \
+            2>&1 | tee "$GITHUB_WORKSPACE/bootstrap-droidian.log"
+          sudo mkdir -p "$root/usr/share/keyrings" "$root/etc/apt" "$root/etc/flash-bootimage" "$root/usr/sbin"
+          sudo cp "$key" "$root/usr/share/keyrings/droidian-bootstrap.gpg"
+          printf 'deb [signed-by=/usr/share/keyrings/droidian-bootstrap.gpg] %s rolling main\n' \
+            "$DROIDIAN_MIRROR" | sudo tee "$root/etc/apt/sources.list"
+          # Never start services and never flash anything in the CI chroot.
+          printf '#!/bin/sh\nexit 101\n' | sudo tee "$root/usr/sbin/policy-rc.d"
+          sudo chmod 0755 "$root/usr/sbin/policy-rc.d"
+          printf 'FLASH_BOOTIMAGE=no\n' | sudo tee "$root/etc/flash-bootimage/01prevent-flashing"
+          echo "DROIDIAN_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Install upstream Droidian metapackages (no Phosh yet)
+        if: ${{ inputs.mode }} == 'base'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          root="$DROIDIAN_ROOT"
+          sudo chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+            apt-get update 2>&1 | tee apt-update.log
+          sudo chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends \
+            droidian-apt-config droidian-archive-keyring mobian-droidian-archive-keyring \
+            2>&1 | tee apt-repository-install.log
+          sudo chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+            apt-get update 2>&1 | tee apt-update-final.log
+          sudo chroot "$root" /usr/bin/env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends droidian-base \
+            2>&1 | tee apt-droidian-base.log
+
+      - name: Validate and archive genuine Droidian base
+        if: ${{ inputs.mode }} == 'base'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          root="$DROIDIAN_ROOT"
+          arch="$(sudo chroot "$root" dpkg --print-architecture)"
+          test "$arch" = arm64
+          status="$(sudo chroot "$root" dpkg-query -W -f='${Status}' droidian-base)"
+          test "$status" = 'install ok installed'
+          sudo chroot "$root" dpkg-query -W -f='${binary:Package} ${Version}\n' | sort > droidian-package-list.txt
+          sudo chroot "$root" apt-cache policy droidian-base > droidian-package-policy.txt
+          sudo tar -C "$root" --numeric-owner -cJf \
+            droidian-base-arm64-NOT-BOOTABLE-NOT-FLASHABLE.tar.xz .
+          sha256sum droidian-base-arm64-NOT-BOOTABLE-NOT-FLASHABLE.tar.xz \
+            | tee droidian-base-sha256.txt
+          {
+            echo '# Droidian Phase 6 result'
+            echo
+            echo '**Official signed Droidian base successfully installed.**'
+            echo
+            echo "- Architecture: $arch"
+            echo "- Droidian base: $status"
+            echo "- Archive size: $(du -h droidian-base-arm64-NOT-BOOTABLE-NOT-FLASHABLE.tar.xz | cut -f1)"
+            echo
+            echo 'No Phosh, Halium Android service container, Pixel 8 adaptation or boot images.'
+            echo '**BUILD ONLY — NO FLASH — NOT BOOTABLE.**'
+          } | tee PHASE6_BUILD_RESULT.md
+          cat PHASE6_BUILD_RESULT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload source audit, rootfs and logs (NO BOOT IMAGES)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-phase6-${{ inputs.mode }}-${{ github.run_number }}
+          path: |
+            PHASE6_UPSTREAM_AUDIT.md
+            PHASE6_BUILD_RESULT.md
+            droidian-package-list.txt
+            droidian-package-policy.txt
+            droidian-base-sha256.txt
+            droidian-base-arm64-NOT-BOOTABLE-NOT-FLASHABLE.tar.xz
+            bootstrap-droidian.log
+            apt-update.log
+            apt-repository-install.log
+            apt-update-final.log
+            apt-droidian-base.log
+          if-no-files-found: warn
+          retention-days: 7
