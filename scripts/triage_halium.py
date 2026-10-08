@@ -11,14 +11,6 @@ from pathlib import Path
 import re
 import sys
 
-ROW = re.compile(
-    r"^\\| \\x60(CONFIG_[A-Z0-9_]+)\\x60 \\| "
-    r"\\x60([^\\x60]*)\\x60 \\| "
-    r"\\x60([^\\x60]*)\\x60 \\| "
-    r"(MATCH|DIFF|UNKNOWN) \\| "
-    r"\\x60([^\\x60]*)\\x60 \\|$"
-)
-
 # These are triage priorities, NOT a list of changes to apply automatically.
 CORE = {
     "CONFIG_SYSVIPC", "CONFIG_NAMESPACES", "CONFIG_PID_NS", "CONFIG_USER_NS",
@@ -57,9 +49,20 @@ def config_values(path: Path) -> dict[str, str]:
 def parse_report(path: Path) -> list[tuple[str, str, str, str, str]]:
     rows = []
     for line in path.read_text(encoding="utf-8").splitlines():
-        m = ROW.fullmatch(line)
-        if m:
-            rows.append(m.groups())
+        if not line.startswith("| `CONFIG_"):
+            continue
+        fields = [part.strip() for part in line.split("|")]
+        if len(fields) != 7:
+            raise ValueError(f"Bad Phase 2 table row: {line[:160]}")
+        key, expected, observed, verdict, source = fields[1:6]
+        if not (key.startswith("`CONFIG_") and key.endswith("`")):
+            raise ValueError(f"Invalid config key: {key}")
+        if verdict not in ("MATCH", "DIFF", "UNKNOWN"):
+            raise ValueError(f"Invalid Phase 2 verdict: {verdict}")
+        rows.append((
+            key.strip("`"), expected.strip("`"),
+            observed.strip("`"), verdict, source.strip("`"),
+        ))
     if not rows:
         raise ValueError("No Phase 2 configuration table found")
     if len({r[0] for r in rows}) != len(rows):
@@ -120,7 +123,7 @@ def make_report(rows: list[tuple[str, str, str, str, str]], actual: dict[str, st
         "",
         "**BUILD ONLY / NO DEVICE ACCESS / UNVERIFIED / NOT A BOOTABLE DROIDIAN IMAGE**",
         "",
-        "This report reuses the Phase 2 artifact's actual Google shusky \`google-built.config\`.",
+        "This report reuses the Phase 2 artifact's actual Google shusky `google-built.config`.",
         "It does not rebuild the kernel and does not change security settings, sources, or firmware.",
         "",
         "## Verified Phase 2 table",
@@ -145,7 +148,7 @@ def make_report(rows: list[tuple[str, str, str, str, str]], actual: dict[str, st
     ])
     for kind, key, expected, observed, source, reason in sorted(mismatches):
         lines.append(
-            f"| {kind} | \`{key}\` | \`{expected}\` | \`{observed}\` | \`{source}\` | {reason} |"
+            f"| {kind} | `{key}` | `{expected}` | `{observed}` | `{source}` | {reason} |"
         )
     lines.extend([
         "",
@@ -155,11 +158,11 @@ def make_report(rows: list[tuple[str, str, str, str, str]], actual: dict[str, st
         "   the actual privileges/setup used by the Halium Android container. Enabling",
         "   namespaces changes the kernel security surface; investigate before modifying.",
         "2. **Kernel boot/initramfs:** Pixel 8 uses split boot components; a generic embedded",
-        "   \`CONFIG_INITRAMFS_SOURCE\` recipe is not a shiba-specific boot strategy.",
+        "   `CONFIG_INITRAMFS_SOURCE` recipe is not a shiba-specific boot strategy.",
         "3. **GKI / vendor ABI:** validate symbol versions, signature/protection constraints,",
         "   and alignment between the selected shusky kernel and the Pixel vendor modules.",
-        "   Phase 2 built Google's \`android-gs-shusky-6.1-android16\` branch;",
-        "   this was **not** verified to match factory \`CP3A.260905.009\`.",
+        "   Phase 2 built Google's `android-gs-shusky-6.1-android16` branch;",
+        "   this was **not** verified to match factory `CP3A.260905.009`.",
         "4. **Userspace compatibility:** Droidian's Android 14 GSI package existing does",
         "   not demonstrate compatibility with Android 17 vendor services on Pixel 8.",
         "5. **Review optional features separately:** Waydroid, Docker, Bluetooth modules",
@@ -168,7 +171,7 @@ def make_report(rows: list[tuple[str, str, str, str, str]], actual: dict[str, st
         "**No patches are applied. No ADB, fastboot, flash, or real-device operations.**",
         "",
     ])
-    return "\\n".join(lines).replace("\\\x60", "`")
+    return "\n".join(lines)
 
 
 def self_test() -> None:
