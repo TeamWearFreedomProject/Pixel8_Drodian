@@ -74,7 +74,7 @@ def main() -> int:
         got = "(not inspected)" if actual is None else actual.get(key, "(absent)")
         verdict = "UNKNOWN" if actual is None else ("MATCH" if got == expected else "DIFF")
         counts[verdict] += 1
-        rows.append(f"| \`{key}\` | \`{expected}\` | \`{got}\` | {verdict} | \`{source}\` |")
+        rows.append(f"| `{key}` | `{expected}` | `{got}` | {verdict} | `{source}` |")
 
     lines = [
         "# Pixel 8 (shiba) — Droidian/Halium compatibility audit",
@@ -83,9 +83,9 @@ def main() -> int:
         "",
         "## Upstream inputs (exact commits)",
         "",
-        f"- Droidian 6.1 configuration fragments: \`{revision(fragments)}\`",
-        f"- Droidian Android 14 GKI Debian packaging: \`{revision(packaging)}\`",
-        f"- Droidian Android 14 GSI package: \`{revision(gsi)}\`",
+        f"- Droidian 6.1 configuration fragments: `{revision(fragments)}`",
+        f"- Droidian Android 14 GKI Debian packaging: `{revision(packaging)}`",
+        f"- Droidian Android 14 GSI package: `{revision(gsi)}`",
         "",
         "## Key observations",
         "",
@@ -94,8 +94,8 @@ def main() -> int:
         "- The upstream 6.1 GKI packaging is generic. It is NOT a Pixel 8 device adaptation.",
         "- Source branch and factory kernel remain unverified for an exact build match.",
         "- Android 14 GSI package existence does NOT prove it works with Pixel 8 Android 17 vendor blobs.",
-        f"- Droidian generic packaging boot-header setting: \`{parse_mk(settings, 'KERNEL_BOOTIMAGE_VERSION')}\`.",
-        f"- Droidian generic packaging FLASH_ENABLED: \`{parse_mk(settings, 'FLASH_ENABLED')}\`.",
+        f"- Droidian generic packaging boot-header setting: `{parse_mk(settings, 'KERNEL_BOOTIMAGE_VERSION')}`.",
+        f"- Droidian generic packaging FLASH_ENABLED: `{parse_mk(settings, 'FLASH_ENABLED')}`.",
         "- Droidian runs Debian userspace and a minimal Android environment in an LXC container. LXC is not a VM, but it is a container.",
         "",
         "## Kernel configuration comparison",
