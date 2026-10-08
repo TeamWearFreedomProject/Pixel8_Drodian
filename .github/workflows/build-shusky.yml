@@ -1,0 +1,156 @@
+name: Pixel 8 shusky - BUILD ONLY
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Start with preflight; vendor/full-gki download and build kernel sources"
+        type: choice
+        required: true
+        default: preflight
+        options:
+          - preflight
+          - vendor
+          - full-gki
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shusky-build-only-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MANIFEST_BRANCH: android-gs-shusky-6.1-android16
+  FACTORY_REFERENCE: CP3A.260905.009
+  FACTORY_KERNEL_REFERENCE: 6.1.162-android14-11-g2ec90535fa34-ab15810641
+  SOURCE_DIR: ${{ github.workspace }}/shusky-src
+
+jobs:
+  kernel:
+    name: Google shusky kernel / ${{ inputs.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Runner environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+          uname -a
+          df -h /
+          free -h
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/.ghcup || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install build tools and Google repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bc bison build-essential ca-certificates cpio curl dwarves file flex git libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils zip zstd
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+          "$HOME/bin/repo" version
+
+      - name: Check official Google shusky manifest
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$SOURCE_DIR"
+          cd "$SOURCE_DIR"
+          "$HOME/bin/repo" init --depth=1 -u https://android.googlesource.com/kernel/manifest -b "$MANIFEST_BRANCH"
+          "$HOME/bin/repo" manifest -o "$GITHUB_WORKSPACE/manifest-unresolved.xml"
+          test -s "$GITHUB_WORKSPACE/manifest-unresolved.xml"
+
+      - name: Sync kernel sources
+        if: inputs.mode != 'preflight'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SOURCE_DIR"
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle 2>&1 | tee "$GITHUB_WORKSPACE/sync.log"
+          "$HOME/bin/repo" manifest -r -o "$GITHUB_WORKSPACE/manifest-resolved.xml"
+          test -f ./build_shusky.sh
+          df -h /
+
+      - name: Compile shusky kernel
+        if: inputs.mode != 'preflight'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SOURCE_DIR"
+          if [[ "${{ inputs.mode }}" == "full-gki" ]]; then
+            BUILD_AOSP_KERNEL=1 bash ./build_shusky.sh 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          else
+            bash ./build_shusky.sh 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          fi
+          test -d ./out/shusky/dist
+          test -n "$(find ./out/shusky/dist -maxdepth 1 -type f -print -quit)"
+
+      - name: Create report
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          {
+            echo "Device: Pixel 8 (shiba), Google shusky family"
+            echo "Mode: ${{ inputs.mode }}"
+            echo "Branch: $MANIFEST_BRANCH"
+            echo "Reference factory: $FACTORY_REFERENCE (NOT source-matched)"
+            echo "Reference kernel: $FACTORY_KERNEL_REFERENCE"
+            echo "BUILD ONLY - NO ADB / FASTBOOT / FLASH / DEVICE"
+            echo "This is a Google kernel experiment, NOT Droidian yet."
+            df -h /
+            if [[ -d "$SOURCE_DIR/out/shusky/dist" ]]; then
+              find "$SOURCE_DIR/out/shusky/dist" -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+              find "$SOURCE_DIR/out/shusky/dist" -maxdepth 1 -type f -print0 | xargs -0 -r sha256sum
+            fi
+          } > "$GITHUB_WORKSPACE/build-report.txt"
+          cat "$GITHUB_WORKSPACE/build-report.txt"
+
+      - name: Gather limited kernel outputs
+        if: success() && inputs.mode != 'preflight'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          dist="$SOURCE_DIR/out/shusky/dist"
+          mkdir -p "$GITHUB_WORKSPACE/build-results"
+          for name in boot.img dtbo.img vendor_kernel_boot.img vendor_dlkm.img system_dlkm.img Image Image.gz Image.lz4; do
+            if [[ -f "$dist/$name" ]]; then
+              size=$(stat -c%s "$dist/$name")
+              if (( size < 157286400 )); then
+                cp "$dist/$name" "$GITHUB_WORKSPACE/build-results/$name"
+              fi
+            fi
+          done
+          cp "$GITHUB_WORKSPACE/build-report.txt" "$GITHUB_WORKSPACE/build-results/"
+          cp "$GITHUB_WORKSPACE/manifest-resolved.xml" "$GITHUB_WORKSPACE/build-results/"
+          echo 'UNVERIFIED - BUILD ONLY - DO NOT FLASH. Not a Droidian ROM.' > "$GITHUB_WORKSPACE/build-results/DO-NOT-FLASH.txt"
+
+      - name: Save kernel artifacts
+        if: success() && inputs.mode != 'preflight'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-shusky-UNVERIFIED-BUILD-ONLY-${{ github.run_number }}
+          path: build-results/
+          retention-days: 7
+          compression-level: 1
+          if-no-files-found: error
+
+      - name: Save diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-diagnostics-${{ github.run_number }}
+          path: |
+            build-report.txt
+            manifest-unresolved.xml
+            manifest-resolved.xml
+            sync.log
+            build.log
+          retention-days: 7
+          if-no-files-found: warn
