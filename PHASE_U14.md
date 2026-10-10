@@ -90,3 +90,9 @@ hardware) is needed before saying a screen displays anything.
 - No Wayland registry handshake or visible GUI was observed. The guest had produced a very large dynamic-loader trace, and `tail` accidentally retained library unload calls instead of the actual startup error.
 - U14 now reports the **first log lines**, errors filtered by words such as `fail`/`backend`/`renderer`/`seat`, and **recent non-loader** lines separately.
 - This triggers **U14 retry #4** to capture a specific compositor failure instead of guessing. Physical Pixel 8 is still unchanged.
+
+## U14 retry #4: dynamic linker fine; Labwc exits before socket
+
+- [U14 run #4](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38066211416) again reached systemd. Labwc 0.9.3 exited with code 1. `ldd` showed all required shared libraries resolved, but there was no accepted socket; no GUI handshake.
+- The labwc upstream manpage documents `labwc -d` to enable full debug information. The new launch now uses this option, removes noisy `LD_DEBUG`, and **unsets `WAYLAND_DISPLAY` before spawning Labwc** (so it does not attempt a nested connection). The test probes the fresh VM's expected auto-created `wayland-0` socket.
+- [U14 run #5] is triggered by this documentation update. No ROM firmware is generated or flashed.
