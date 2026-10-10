@@ -78,7 +78,7 @@ static int filesystem_matches(const char *path, int allow_file,
     unsigned char sb[SUPER_SIZE];
     ssize_t got = pread(fd, sb, sizeof(sb), SUPER_OFFSET);
     close(fd);
-    if (got != sizeof(sb)) return 0;
+    if (got != (ssize_t)sizeof(sb)) return 0;
     if (sb[EXT4_MAGIC_OFFSET] != 0x53 || sb[EXT4_MAGIC_OFFSET + 1] != 0xEF)
         return 0;
     if (memcmp(sb + EXT4_UUID_OFFSET, requested_uuid, 16) != 0)
