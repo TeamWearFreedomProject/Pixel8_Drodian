@@ -114,7 +114,7 @@ jobs:
             | lz4 -l -z -c > output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4
           test -s output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4
           lz4 -dc output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 \
-            | cpio -it --quiet > output/U8_INITRAMFS_FILELIST.txt
+            | cpio -it --quiet | sed 's@^\./@@' > output/U8_INITRAMFS_FILELIST.txt
           grep -qx 'init' output/U8_INITRAMFS_FILELIST.txt
           grep -qx 'bin/busybox' output/U8_INITRAMFS_FILELIST.txt
 
@@ -133,8 +133,7 @@ jobs:
           grep -Fq 'NOT bootable and NOT flashable' output/U8_REPORT.md
           echo 'Research initramfs source present; actual rootfs mount/switch_root NOT executed.' > output/DO_NOT_FLASH.txt
           echo 'No validated Evolution X KMI, vendor boot, DTBO, or Pixel 8 hardware boot.' >> output/DO_NOT_FLASH.txt
-          sha256sum output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 \
-            > output/U8_SHA256SUMS
+          (cd output && sha256sum u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 > U8_SHA256SUMS)
           (cd output && sha256sum -c U8_SHA256SUMS)
           cat output/U8_REPORT.md >> "$GITHUB_STEP_SUMMARY"
 
