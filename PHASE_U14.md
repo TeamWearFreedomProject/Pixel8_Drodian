@@ -112,3 +112,9 @@ hardware) is needed before saying a screen displays anything.
 - In this research VM the Ubuntu rootfs is intentionally mounted **read-only**, with writable `/run` and a per-test runtime directory. Optional X11 socket allocation under `/tmp` is not available; this is not evidence of bad Pixel 8 GPU drivers.
 - For the real native-Wayland-only Labwc test, explicitly set `WLR_XWAYLAND=` (disable optional Xwayland per wlroots/Labwc docs). This is a **VM-only runtime environment change**, not a new phone firmware.
 - This commit triggers **U14 retry #7**, which must still validate a real `wl_registry.global` protocol response before claiming the headless compositor succeeded.
+
+## U14 retry #7 — X11 socket error persists, temporary tmpfs remedy
+
+- [U14 run #7](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38066968909) confirmed that setting `WLR_XWAYLAND=` alone did **not** prevent Labwc 0.9.3 from attempting Xwayland: again `No display available in the first 33`.
+- The temporary QEMU test rootfs is deliberately **read-only**; Xwayland expects a writable `/tmp/.X11-unix` for server sockets. The revised test creates a **32 MiB in-memory tmpfs mounted over /tmp inside the QEMU guest only**, then creates `/tmp/.X11-unix` with proper sticky permissions. The original on-disk U6 ext4 remains read-only and unchanged.
+- This triggers **U14 retry #8**. Success still requires an actual Labwc Wayland Unix socket and protocol registry response; the experiment is not running on the Pixel 8.
