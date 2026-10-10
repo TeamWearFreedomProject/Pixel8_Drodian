@@ -1,0 +1,195 @@
+name: Pixel 8 Ubuntu U7 - experimental boot v4 and init_boot (DO NOT FLASH)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U7.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: shiba-u7-boot-prototype-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  research-boot:
+    name: Build and inspect inert Android v4 kernel/ramdisk containers (NO PHONE)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout audit script and protocol
+        uses: actions/checkout@v4
+
+      - name: Install build, ARM64 and verification utilities
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cpio lz4 file binutils git python3 \
+            qemu-user-static binfmt-support ca-certificates
+          sudo update-binfmts --enable qemu-aarch64 || true
+          python3 -m py_compile scripts/phase_u7_boot_v4_audit.py
+          mkdir -p out old ubuntu-u1 tools ramdisk/bin ramdisk/proc ramdisk/sys ramdisk/dev
+          df -h /
+
+      - name: Fetch earlier Google shusky experimental kernel artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 37721346230
+          name: shiba-shusky-UNVERIFIED-BUILD-ONLY-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: old
+
+      - name: Verify and extract old experimental kernel (not current Evolution X)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s old/boot.img
+          python3 - <<'PY'
+          import hashlib, struct
+          from pathlib import Path
+          blob = Path("old/boot.img").read_bytes()
+          if blob[:8] != b"ANDROID!":
+              raise SystemExit("Original kernel image lacks Android boot magic")
+          size = struct.unpack_from("<I", blob, 8)[0]
+          version = struct.unpack_from("<I", blob, 40)[0]
+          if version != 4 or size <= 1024*1024 or size > 64*1024*1024:
+              raise SystemExit("Unexpected source Android v4 kernel size/header")
+          raw = blob[4096:4096 + size]
+          if len(raw) != size:
+              raise SystemExit("Kernel section truncated")
+          Path("tools/kernel-old-shusky.bin").write_bytes(raw)
+          Path("out/U7_SOURCE_SHA256.txt").write_text(
+              "experimental_kernel_sha256 " + hashlib.sha256(raw).hexdigest() + "\n")
+          print("Legacy v4 kernel extracted:", len(raw), "bytes")
+          PY
+
+      - name: Obtain a real static Ubuntu ARM64 BusyBox from verified U1 rootfs
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38033533558
+          name: shiba-ubuntu-u1-bootstrap-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ubuntu-u1
+
+      - name: Prepare static ARM64 shell for inert initial ramdisk
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo 'ff19b6c8698872f361f75e62a4b71bf979321dcbc59b70d0199721c592c315a1  ubuntu-u1/ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz' | sha256sum -c -
+          root="$RUNNER_TEMP/u7-ubuntu-arm64"
+          sudo mkdir -p "$root"
+          sudo tar -xJf ubuntu-u1/ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz -C "$root"
+          test "$(sudo chroot "$root" dpkg --print-architecture)" = arm64
+          sudo mkdir -p "$root/etc/apt/sources.list.d"
+          sudo rm -f "$root/etc/apt/sources.list"
+          sudo find "$root/etc/apt/sources.list.d" -maxdepth 1 -type f \
+            \( -name '*.sources' -o -name '*.list' \) -delete
+          sudo tee "$root/etc/apt/sources.list.d/u7-resolute.sources" >/dev/null <<'EOF'
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: resolute
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo chroot "$root" env DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo chroot "$root" env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends busybox-static
+          test -x "$root/bin/busybox"
+          sudo cp "$root/bin/busybox" ramdisk/bin/busybox
+          sudo chown "$USER:$USER" ramdisk/bin/busybox
+          chmod 755 ramdisk/bin/busybox
+          ln -s busybox ramdisk/bin/sh
+          file ramdisk/bin/busybox
+          readelf -h ramdisk/bin/busybox | grep 'AArch64'
+          if readelf -l ramdisk/bin/busybox | grep -q INTERP; then
+            echo '::error::BusyBox is not static'
+            exit 1
+          fi
+          # Deliberately inert first-stage: no rootfs, userdata, mount or Android changes.
+          cat > ramdisk/init <<'EOF'
+          #!/bin/sh
+          export PATH=/bin:/sbin
+          echo "U7_RESEARCH_NO_ROOTFS: offline header experiment only"
+          echo "No verified Pixel8 kernel/vendor pair or Linux root filesystem location."
+          echo "System cannot enter Ubuntu from this research ramdisk."
+          while true; do
+            /bin/busybox sleep 60
+          done
+          EOF
+          chmod 755 ramdisk/init
+          test "$(readlink ramdisk/bin/sh)" = busybox
+          echo "U7_BUSYBOX_SHA256=$(sha256sum ramdisk/bin/busybox | cut -d ' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Pack LZ4 legacy Android-compatible ramdisk and AOSP v4 images
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone -q --depth=1 \
+            https://android.googlesource.com/platform/system/tools/mkbootimg.git \
+            tools/aosp-mkbootimg
+          git -C tools/aosp-mkbootimg rev-parse HEAD > out/U7_MKBOOTIMG_COMMIT.txt
+          (cd ramdisk && find . -print0 | LC_ALL=C sort -z | \
+            cpio --null -o --format=newc --quiet) | \
+            lz4 -l -z -c > tools/u7-ramdisk.cpio.lz4
+          test -s tools/u7-ramdisk.cpio.lz4
+          python3 tools/aosp-mkbootimg/mkbootimg.py \
+            --header_version 4 --kernel tools/kernel-old-shusky.bin \
+            --output out/boot.img
+          python3 tools/aosp-mkbootimg/mkbootimg.py \
+            --header_version 4 --ramdisk tools/u7-ramdisk.cpio.lz4 \
+            --output out/init_boot.img
+
+      - name: Fail-closed inspect images, kernel identity and ramdisk content
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/phase_u7_boot_v4_audit.py \
+            --legacy-boot old/boot.img \
+            --kernel tools/kernel-old-shusky.bin \
+            --ramdisk-lz4 tools/u7-ramdisk.cpio.lz4 \
+            --ramdisk-dir ramdisk \
+            --boot out/boot.img --init-boot out/init_boot.img \
+            --out out
+          echo "U7_BUSYBOX_SHA256=$U7_BUSYBOX_SHA256" >> out/U7_MKBOOTIMG_COMMIT.txt
+          python3 -m json.tool out/U7_METADATA.json > /dev/null
+          cat out/U7_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          echo 'The U7 boot.img and init_boot.img are UNVERIFIED RESEARCH PROTOTYPES.' > out/DO_NOT_FLASH.txt
+          echo 'They cannot boot Ubuntu; vendor and module compatibility was not established.' >> out/DO_NOT_FLASH.txt
+          echo 'NEVER use fastboot flash or other partition writes with these images.' >> out/DO_NOT_FLASH.txt
+          sha256sum out/boot.img out/init_boot.img > out/U7_SHA256SUMS
+          du -h out/*.img
+
+      - name: Upload source/structure audit only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u7-boot-structure-reports-${{ github.run_number }}
+          path: |
+            out/U7_METADATA.json
+            out/U7_REPORT.md
+            out/U7_MKBOOTIMG_COMMIT.txt
+            out/U7_SOURCE_SHA256.txt
+            out/U7_SHA256SUMS
+            out/DO_NOT_FLASH.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload explicitly NONFLASHABLE experimental header containers
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u7-EXPERIMENTAL-boot-init_boot-DO_NOT_FLASH-${{ github.run_number }}
+          path: |
+            out/boot.img
+            out/init_boot.img
+            out/DO_NOT_FLASH.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 1
