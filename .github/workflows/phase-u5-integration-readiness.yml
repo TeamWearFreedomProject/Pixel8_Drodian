@@ -1,0 +1,85 @@
+name: Pixel 8 Ubuntu U5 - rootfs and native boot readiness (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U5.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: shiba-ubuntu-u5-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  offline-rootfs-and-source-gate:
+    name: Validate GUI rootfs, Android16 upstream and inert initramfs contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout research code
+        uses: actions/checkout@v4
+
+      - name: Verify research script syntax
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/phase_u5_integration_audit.py
+          mkdir -p sources output
+
+      - name: Download verified Ubuntu U3 dual-GUI userspace archive
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38042365918
+          name: shiba-u3-ubuntu-arm64-gui-NOT-BOOTABLE-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: u3
+
+      - name: Pin current publicly available Evolution X Android 16 source references
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --branch bka \
+            https://github.com/Evolution-X-Devices/device_google_shusky.git sources/shusky
+          git clone --depth 1 --branch bka \
+            https://github.com/Evolution-X-Devices/device_google_zuma.git sources/zuma
+          test "$(git -C sources/shusky rev-parse HEAD)" = \
+            56006ae8162db285e776d85319d9942945b87194
+          test "$(git -C sources/zuma rev-parse HEAD)" = \
+            fba447c6317f23501dbac209b6479e458800c449
+          {
+            git -C sources/shusky rev-parse HEAD
+            git -C sources/zuma rev-parse HEAD
+          } > output/U5_SOURCE_COMMITS.txt
+
+      - name: Inspect real U3 tar archive and validate fail-closed initramfs design
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s u3/ubuntu-26.04-arm64-u3-gui-NOT-BOOTABLE.tar.xz
+          python3 scripts/phase_u5_integration_audit.py \
+            --u3 u3/ubuntu-26.04-arm64-u3-gui-NOT-BOOTABLE.tar.xz \
+            --sources sources \
+            --out output
+          python3 -m json.tool output/U5_AUDIT.json > /dev/null
+          python3 -m json.tool output/U5_INITRAMFS_CONTRACT.json > /dev/null
+          grep -Fq 'FAIL boot/flash readiness' output/U5_REPORT.md
+          grep -Fq 'NO FLASHABLE IMAGE CREATED' output/U5_REPORT.md
+          cat output/U5_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish metadata only, NEVER flashable firmware
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u5-offline-rootfs-design-audit-${{ github.run_number }}
+          path: |
+            output/U5_AUDIT.json
+            output/U5_REPORT.md
+            output/U5_INITRAMFS_CONTRACT.json
+            output/U5_SOURCE_COMMITS.txt
+          if-no-files-found: warn
+          retention-days: 30
