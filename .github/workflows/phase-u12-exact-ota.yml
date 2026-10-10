@@ -1,0 +1,89 @@
+name: Pixel 8 Ubuntu U12 - exact installed Evolution X OTA metadata (NO FLASH)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U12.md
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  exact-ota-identity:
+    name: Verify official shiba 20260915 11.11 ROM metadata & isolate research kernel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout U12 official build source auditor
+        uses: actions/checkout@v4
+
+      - name: Download U7 experimental boot ONLY for identity comparison
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38050847238
+          name: shiba-u7-EXPERIMENTAL-boot-init_boot-DO_NOT_FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input-u7
+
+      - name: Fetch pin-specific official Evolution X OTA GitHub metadata
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/u12_exact_ota_pin.py
+          git clone -q --depth=1 --branch bka \
+            https://github.com/Evolution-X/OTA.git official-ota
+          test "$(git -C official-ota rev-parse HEAD)" = \
+            b400c98274f840b503e142782957cd37d699f0bb
+          test -s official-ota/builds/shiba.json
+          test -s input-u7/boot.img
+          mkdir -p output
+
+      - name: Compare exact confirmed build with official SHA256 and boot-image names
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u12_exact_ota_pin.py \
+            --ota official-ota \
+            --u7 input-u7/boot.img \
+            --out output
+          python3 -m json.tool output/U12_OFFICIAL_BUILD.json >/dev/null
+          grep -Fq 'ROM binary still NOT verified' output/U12_REPORT.md
+          grep -Fq 'PIXEL8 UBUNTU STILL NOT FLASHABLE' output/U12_REPORT.md
+          cat output/U12_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check ONLY the HTTP HEAD response of official CDN; never download 3GB without a separate task
+        shell: bash
+        run: |
+          set -euo pipefail
+          url=$(python3 -c 'import json; print(json.load(open("official-ota/builds/shiba.json"))["response"][0]["download"])')
+          set +e
+          curl --head --location --silent --show-error --max-time 35 \
+            --retry 1 "$url" -o output/U12_OFFICIAL_CDN_HEADERS.txt
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            printf '%s\n' 'HEAD_CHECK_RETURNED_HTTP_HEADERS; NOT ZIP CONTENT VALIDATED' \
+              > output/U12_CDN_CHECK.txt
+          else
+            printf 'CDN_HEAD_CHECK_UNAVAILABLE_EXIT_%s; ROM CONTENT STILL UNVERIFIED\n' "$rc" \
+              > output/U12_CDN_CHECK.txt
+          fi
+          # HTTP responses are merely connectivity diagnostics, not download proof.
+          cat output/U12_CDN_CHECK.txt
+          # Keep headers out of the immutable SHA256 provenance result.
+
+      - name: Save metadata-only evidence (NO ROM ZIP/bootable images)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u12-exact-evolutionx-ota-metadata-${{ github.run_number }}
+          path: |
+            output/U12_REPORT.md
+            output/U12_OFFICIAL_BUILD.json
+            output/U12_CDN_CHECK.txt
+            output/U12_OFFICIAL_CDN_HEADERS.txt
+          if-no-files-found: warn
+          retention-days: 30
