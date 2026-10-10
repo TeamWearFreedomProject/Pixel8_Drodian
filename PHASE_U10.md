@@ -66,3 +66,10 @@ Initial CI is triggered by committing this plan.
 - VM job failed at disposable ext4 copy validation: `debugfs` printed its version banner on **stderr** and the Python helper accidentally concatenated stdout/stderr when comparing a newly injected systemd unit with its source. This was a **host-side verification bug**, not a guest boot, kernel or filesystem identity failure.
 - `scripts/u10_prepare_vm.py` now reads only the actual `debugfs` stdout while still detecting errors from both streams.
 - This document change triggers U10 #2. **No physical device, boot partition or Android data is accessed.**
+
+## U10 second CI run — actual service executed; log validator adjusted
+
+- [U10 run #2](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38060602316): source compatibility gate PASS and QEMU guest **really ran the VM-only systemd unit** — console printed `U10_SYSTEMD_VM_SERVICE_EXECUTED` after `U10_REACHED_SWITCH_ROOT`. The original U6 ext4 SHA-256 remained unchanged.
+- The job still returned FAIL because `scripts/u10_vm_assert.py` required a particular `systemd[1]` or welcome banner, which this **minimal isolated target** did not log. The guest showed a named `u10-vm-smoke.service` runtime warning and the marker, independently confirming systemd started the unit.
+- Validator now accepts a named systemd unit runtime log **together with** the unique unit console marker; it still requires actual Linux, U8, and `switch_root` guest markers. No synthetic success is produced.
+- This documentation change triggers U10 retry #3. The full interactive Linux login prompt, native GUI and Pixel 8 hardware are NOT validated.
