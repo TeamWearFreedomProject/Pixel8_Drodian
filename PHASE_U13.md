@@ -77,3 +77,9 @@ establish that Ubuntu's display, touchscreen, GPU, power, memory, boot
 chain or security will work on the actual Pixel 8.
 
 **No bootable Pixel 8 Ubuntu firmware is produced by U13. DO NOT FLASH.**
+
+## U13 run #1 diagnostic and fix
+
+- [Initial U13 CI run](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38063861509) failed **before** downloading the 3.03 GB official ZIP, during the pinned `payload-dumper-go` build: `fatal error: lzma.h: No such file or directory`.
+- The repo, U7 boot and pinned source/toolchain stages passed. Missing Ubuntu host dependency was identified as `liblzma-dev`, needed by the Go XZ CGo package.
+- Added `liblzma-dev` to the host dependencies, and this documentation edit launches **U13 retry #2**. No ROM download, flashable image or device operation happened in run #1.
