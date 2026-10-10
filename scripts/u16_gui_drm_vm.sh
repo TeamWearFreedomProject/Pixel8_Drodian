@@ -46,12 +46,26 @@ if [ ! -c /dev/dri/card0 ]; then
   exit 1
 fi
 echo U16_DRM_CARD_PRESENT
-driver_path=$(readlink -f /sys/class/drm/card0/device/driver 2>/dev/null || :)
-echo "U16_DRM_CARD_DRIVER $driver_path"
-case "$driver_path" in
-  *virtio_gpu*) echo U16_VIRTIO_GPU_DRIVER_VERIFIED ;;
-  *) echo U16_FAIL_NOT_VIRTIO_GPU; exit 1 ;;
-esac
+# PCI virtio-gpu has a two-layer driver model: card0's parent is
+# PCI "virtio-pci", while the child virtio bus device binds "virtio_gpu".
+# Validate the *child of the card's actual PCI parent*, not the PCI driver.
+pci_driver=$(readlink -f /sys/class/drm/card0/device/driver 2>/dev/null || :)
+echo "U16_DRM_PCI_TRANSPORT $pci_driver"
+bound_gpu=0
+for child in /sys/class/drm/card0/device/virtio*; do
+  [ -r "$child/device" ] || continue
+  child_id=$(cat "$child/device" || :)
+  child_driver=$(readlink -f "$child/driver" 2>/dev/null || :)
+  echo "U16_DRM_VIRTIO_CHILD $child id=$child_id driver=$child_driver"
+  case "$child_id:$child_driver" in
+    0x0010:*/virtio_gpu) bound_gpu=1 ;;
+  esac
+done
+if [ "$bound_gpu" -ne 1 ]; then
+  echo U16_FAIL_NOT_VIRTIO_GPU
+  exit 1
+fi
+echo U16_VIRTIO_GPU_DRIVER_VERIFIED
 connected=0
 for p in /sys/class/drm/card*-*/status; do
   [ -f "$p" ] || continue
