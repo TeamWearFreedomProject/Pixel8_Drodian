@@ -137,6 +137,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          mkdir -p ramdisk/bin
           aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static \
             scripts/u9_rootfs_probe.c -o ramdisk/bin/u8-rootfs-probe
           gcc -O2 -Wall -Wextra -Werror -static \
