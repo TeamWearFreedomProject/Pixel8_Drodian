@@ -40,7 +40,7 @@ def main():
         "ubuntu_64bit_arm_linux_started":"Linux version 6.6.89" in log,
         "readonly_root_switch_reached":"U14_REACHED_SWITCH_ROOT" in log,
         "labwc_headless_wayland_protocol_handshake":"U14_REAL_WAYLAND_PROTOCOL_REGISTRY_OK" in log,
-        "screencopy_client_saved_png":"U15_REAL_WAYLAND_PNG_WRITTEN_TO_VM_SCRATCH" in log,
+        "screencopy_client_saved_png": all(x in log for x in ("U15_PNG_BASE64_BEGIN","U15_PNG_BASE64_END","U15_REAL_WAYLAND_PNG_SERIALIZED")),
         "successful_original_u14_guest_service":"U14_RESEARCH_HEADLESS_WAYLAND_TEST_PASSED" in log,
         "valid_png_dimensions":width>=640 and height>=480,
         "not_completely_uniform":(unique_colors!="1" and unique_colors!=1),
