@@ -50,3 +50,11 @@ screen socket:
 
 This document triggers the initial U16 branch CI.
 **U16 SUCCESS remains UNVERIFIED until actual logs and image artifacts pass.**
+
+## U16 Run #4 — actual QEMU device detection failed
+
+- [Run #4](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38091302024) completed the full 6.6.89 DRM kernel build, retrieved ARM64 seatd/grim, prepared a disposable rootfs, and booted Ubuntu 26.04 systemd in QEMU. SHA256 source rootfs stayed unchanged.
+- The guest printed `U16_FAIL_DRM_CARD_ABSENT`: there was no /dev/dri/card0 and /sys/class/drm only had `version`. Therefore **virtio-GPU was NOT recognized** and Labwc DRM/PNG capture were never attempted; the final assertion correctly reported `PARTIAL_QEMU_BOOT_ONLY`.
+- Retry hypothesis (NOT proven yet): a **PCI virtio-GPU** attachment may be discovered where the earlier virtio-mmio GPU was not. QEMU ARM `virt` documentation explicitly supports `virtio-gpu-pci` with built-in CONFIG_PCI / PCI_HOST_GENERIC / VIRTIO_PCI / DRM_VIRTIO_GPU.
+- This change switches **only the QEMU peripheral** to virtio-gpu-pci and captures PCI/virtio sysfs plus expanded kernel probe diagnostics. It **does not claim the PCI path works until the VM logs prove it**.
+- No Pixel device, GPU vendor driver, Android boot image, flashing, or data writes.
