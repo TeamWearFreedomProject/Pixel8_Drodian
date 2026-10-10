@@ -107,6 +107,9 @@ if [ "$ready" -eq 1 ]; then
   kill "$waybar_pid" 2>/dev/null || :
   wait "$waybar_pid" 2>/dev/null || :
 fi
+echo U16_QEMU_DISPLAY_CAPTURE_WINDOW
+# Keep actual DRM compositor alive while host QEMU HMP screendump runs.
+sleep 28
 echo U16_LABWC_LOG_BEGIN
 cat "$XDG_RUNTIME_DIR/labwc.log" 2>/dev/null || :
 echo U16_LABWC_LOG_END
