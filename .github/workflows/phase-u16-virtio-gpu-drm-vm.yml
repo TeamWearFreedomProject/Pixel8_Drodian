@@ -70,6 +70,15 @@ jobs:
           echo 'd3cbe5e0a0e170e9e1e3071b32394e0ddd686887351ed1f4aa2b8bed814bde9e  inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img' | sha256sum -c -
           echo 'dc50919b6a4e89dc8c27d84dee5335105c756573ef3dcf74c3465a414e50372b  inputs/u8/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4' | sha256sum -c -
 
+      - name: Restore previously verified U16 QEMU-only DRM kernel cache
+        id: u16-kernel-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-6.6.89/arch/arm64/boot/Image
+            build/linux-6.6.89/.config
+          key: u16-arm64-6.6.89-virtio-gpu-pci-kconfig-v1
+
       - name: Build generic ARM64 QEMU kernel with built-in virtio-GPU DRM/KMS (NOT PIXEL KERNEL)
         shell: bash
         run: |
@@ -79,23 +88,35 @@ jobs:
           tar -xf build/linux-6.6.89.tar.xz -C build
           (
             cd build/linux-6.6.89
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
-            scripts/config --file .config \
-              -e VIRTIO -e VIRTIO_MMIO -e VIRTIO_BLK \
-              -e EXT4_FS -e DEVTMPFS -e DEVTMPFS_MOUNT -e TMPFS \
-              -e BLK_DEV_INITRD -e RD_LZ4 -e PROC_FS -e SYSFS \
-              -e SERIAL_AMBA_PL011 -e SERIAL_AMBA_PL011_CONSOLE \
-              -e BINFMT_ELF -e CGROUPS -e FHANDLE \
-              -e DRM -e DRM_VIRTIO_GPU -e DRM_KMS_HELPER -e DRM_FBDEV_EMULATION \
-              -e PCI -e PCI_HOST_GENERIC -e VIRTIO_PCI
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+            if [ "${{ steps.u16-kernel-cache.outputs.cache-hit }}" != "true" ]; then
+              make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+              scripts/config --file .config \
+                -e VIRTIO -e VIRTIO_MMIO -e VIRTIO_BLK \
+                -e EXT4_FS -e DEVTMPFS -e DEVTMPFS_MOUNT -e TMPFS \
+                -e BLK_DEV_INITRD -e RD_LZ4 -e PROC_FS -e SYSFS \
+                -e SERIAL_AMBA_PL011 -e SERIAL_AMBA_PL011_CONSOLE \
+                -e BINFMT_ELF -e CGROUPS -e FHANDLE \
+                -e DRM -e DRM_VIRTIO_GPU -e DRM_KMS_HELPER -e DRM_FBDEV_EMULATION \
+                -e PCI -e PCI_HOST_GENERIC -e VIRTIO_PCI
+              make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+              make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j4 Image
+            fi
             for config in VIRTIO VIRTIO_MMIO VIRTIO_BLK EXT4_FS DEVTMPFS DRM DRM_VIRTIO_GPU PCI PCI_HOST_GENERIC VIRTIO_PCI; do
               grep -qx "CONFIG_$config=y" .config || { echo "::error::Kernel CONFIG_$config not built-in"; exit 1; }
             done
-            make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j4 Image
+            test -s arch/arm64/boot/Image
           )
           cp build/linux-6.6.89/.config output/U16_GENERIC_QEMU_CONFIG.txt
           sha256sum build/linux-6.6.89/arch/arm64/boot/Image | tee output/U16_KERNEL_SHA256.txt
+
+      - name: Save proven generic U16 DRM kernel for fast retries
+        if: steps.u16-kernel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-6.6.89/arch/arm64/boot/Image
+            build/linux-6.6.89/.config
+          key: u16-arm64-6.6.89-virtio-gpu-pci-kconfig-v1
 
       - name: Compile actual static AArch64 Wayland client for protocol verification
         shell: bash
@@ -210,7 +231,7 @@ jobs:
             -drive if=none,format=raw,readonly=on,file=build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img,id=u16disk \
             -device virtio-blk-device,drive=u16disk \
             -device virtio-gpu-pci,max_outputs=1 \
-            -append 'console=ttyAMA0,115200 earlycon=pl011,0x9000000 loglevel=7 drm.debug=0x1ff rdinit=/init u8.rootuuid=d6b067e7-31e4-4aa3-8edf-d7e70fec0747 u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED systemd.unit=u14-gui.target systemd.log_target=console' \
+            -append 'console=ttyAMA0,115200 earlycon=pl011,0x9000000 loglevel=5 rdinit=/init u8.rootuuid=d6b067e7-31e4-4aa3-8edf-d7e70fec0747 u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED systemd.unit=u14-gui.target systemd.log_target=console' \
             > output/U16_QEMU_SERIAL.log 2>&1 &
           qemu_pid=$!
           set +e
