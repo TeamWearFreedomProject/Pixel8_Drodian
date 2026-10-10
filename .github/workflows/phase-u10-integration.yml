@@ -169,3 +169,51 @@ jobs:
             output/U10_QEMU_EXIT.txt
           if-no-files-found: warn
           retention-days: 30
+
+  shiba-android16-compatibility-gate:
+    name: Pin shiba source and reject flash-ready claims without actual KMI evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout offline readiness gate
+        uses: actions/checkout@v4
+
+      - name: Fetch previous experimental shiba U7 boot (research only)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38050847238
+          name: shiba-u7-EXPERIMENTAL-boot-init_boot-DO_NOT_FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u7
+
+      - name: Pin public Android 16 Evolution X sources, not exact phone firmware
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p sources output
+          git clone -q --depth=1 --branch bka \
+            https://github.com/Evolution-X-Devices/device_google_shusky.git sources/shusky
+          git clone -q --depth=1 --branch bka \
+            https://github.com/Evolution-X-Devices/device_google_zuma.git sources/zuma
+          test "$(git -C sources/shusky rev-parse HEAD)" = \
+            56006ae8162db285e776d85319d9942945b87194
+          test "$(git -C sources/zuma rev-parse HEAD)" = \
+            fba447c6317f23501dbac209b6479e458800c449
+          python3 scripts/u10_shiba_readiness.py \
+            --sources sources \
+            --boot inputs/u7/boot.img \
+            --out output
+          grep -Fq "device boot is STILL BLOCKED" output/U10_SHIBA_READINESS.md
+          cat output/U10_SHIBA_READINESS.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save source/firmware compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u10-android16-readiness-${{ github.run_number }}
+          path: |
+            output/U10_SHIBA_READINESS.md
+            output/U10_SHIBA_READINESS.json
+          if-no-files-found: warn
+          retention-days: 30
