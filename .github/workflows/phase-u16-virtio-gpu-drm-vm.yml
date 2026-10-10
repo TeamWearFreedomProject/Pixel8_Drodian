@@ -1,0 +1,292 @@
+name: Pixel 8 Ubuntu U16 - QEMU virtio-GPU DRM Labwc display (VM ONLY)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U16.md
+  pull_request:
+    paths:
+      - PHASE_U16.md
+      - .github/workflows/phase-u16-virtio-gpu-drm-vm.yml
+      - scripts/u16_*.py
+      - scripts/u16_*.sh
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u16-qemu-virtio-drm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qemu-real-wayland:
+    name: Virtio-GPU KMS and real Labwc display with independent screen captures (VM ONLY)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    steps:
+      - name: Checkout U14 build-only tests
+        uses: actions/checkout@v4
+
+      - name: Install host and cross-build tools for guest ARM64 Wayland handshake
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross linux-libc-dev-arm64-cross \
+            bc bison flex build-essential libssl-dev libelf-dev ca-certificates curl xz-utils \
+            qemu-system-arm qemu-user-static e2fsprogs lz4 cpio binutils file python3-pil
+          python3 -m py_compile scripts/u14_prepare_gui_vm.py scripts/u14_assert_gui_vm.py scripts/u15_prepare_gui_vm.py scripts/u15_assert_pixels.py scripts/u15_recover_serial_png.py scripts/u16_prepare_vm.py scripts/u16_assert_drm.py scripts/u16_recover_serial_png.py scripts/u16_hmp_screendump.py
+          sh -n scripts/u14_gui_vm.sh
+          sh -n scripts/u15_gui_capture_vm.sh
+          sh -n scripts/u16_gui_drm_vm.sh
+          mkdir -p inputs/u6 inputs/u8 inputs/kernel build/ramdisk output
+          df -h /
+
+      - name: Fetch the real audited U6 Ubuntu 26.04 ARM64 GUI rootfs
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38047914957
+          name: shiba-u6-ubuntu-ext4-NOT_BOOTABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u6
+
+      - name: Fetch U8 ARM64 BusyBox bootloader-independent research initramfs
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38052743722
+          name: shiba-u8-initramfs-RESEARCH-DO_NOT_FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u8
+
+      - name: SHA256-verify all prior proven inputs (original IMG remains immutable)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo 'd3cbe5e0a0e170e9e1e3071b32394e0ddd686887351ed1f4aa2b8bed814bde9e  inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img' | sha256sum -c -
+          echo 'dc50919b6a4e89dc8c27d84dee5335105c756573ef3dcf74c3465a414e50372b  inputs/u8/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4' | sha256sum -c -
+
+      - name: Restore previously verified U16 QEMU-only DRM kernel cache
+        id: u16-kernel-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-6.6.89/arch/arm64/boot/Image
+            build/linux-6.6.89/.config
+          key: u16-arm64-6.6.89-virtio-gpu-pci-kconfig-v1
+
+      - name: Build generic ARM64 QEMU kernel with built-in virtio-GPU DRM/KMS (NOT PIXEL KERNEL)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 --connect-timeout 30 https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.89.tar.xz -o build/linux-6.6.89.tar.xz
+          echo 'c21af7d36068e4ac0704c242eac8459212e6bf4a5d09df941b9b4d17dc1eba00  build/linux-6.6.89.tar.xz' | sha256sum -c -
+          tar -xf build/linux-6.6.89.tar.xz -C build
+          (
+            cd build/linux-6.6.89
+            if [ "${{ steps.u16-kernel-cache.outputs.cache-hit }}" != "true" ]; then
+              make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+              scripts/config --file .config \
+                -e VIRTIO -e VIRTIO_MMIO -e VIRTIO_BLK \
+                -e EXT4_FS -e DEVTMPFS -e DEVTMPFS_MOUNT -e TMPFS \
+                -e BLK_DEV_INITRD -e RD_LZ4 -e PROC_FS -e SYSFS \
+                -e SERIAL_AMBA_PL011 -e SERIAL_AMBA_PL011_CONSOLE \
+                -e BINFMT_ELF -e CGROUPS -e FHANDLE \
+                -e DRM -e DRM_VIRTIO_GPU -e DRM_KMS_HELPER -e DRM_FBDEV_EMULATION \
+                -e PCI -e PCI_HOST_GENERIC -e VIRTIO_PCI
+              make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+              make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j4 Image
+            fi
+            for config in VIRTIO VIRTIO_MMIO VIRTIO_BLK EXT4_FS DEVTMPFS DRM DRM_VIRTIO_GPU PCI PCI_HOST_GENERIC VIRTIO_PCI; do
+              grep -qx "CONFIG_$config=y" .config || { echo "::error::Kernel CONFIG_$config not built-in"; exit 1; }
+            done
+            test -s arch/arm64/boot/Image
+          )
+          cp build/linux-6.6.89/.config output/U16_GENERIC_QEMU_CONFIG.txt
+          sha256sum build/linux-6.6.89/arch/arm64/boot/Image | tee output/U16_KERNEL_SHA256.txt
+
+      - name: Save proven generic U16 DRM kernel for fast retries
+        if: steps.u16-kernel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-6.6.89/arch/arm64/boot/Image
+            build/linux-6.6.89/.config
+          key: u16-arm64-6.6.89-virtio-gpu-pci-kconfig-v1
+
+      - name: Compile actual static AArch64 Wayland client for protocol verification
+        shell: bash
+        run: |
+          set -euxo pipefail
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static \
+            scripts/u14_wayland_probe.c -o build/u14-wayland-probe
+          readelf -h build/u14-wayland-probe | grep -F AArch64
+          if readelf -l build/u14-wayland-probe | grep -q INTERP; then
+            echo '::error::Wayland probe unexpectedly dynamically linked'
+            exit 1
+          fi
+          set +e
+          qemu-aarch64-static build/u14-wayland-probe > output/U14_PROBE_NEGATIVE.log 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -eq 2 ] || exit 1
+          sha256sum build/u14-wayland-probe | tee output/U14_PROBE_SHA256.txt
+
+      - name: Acquire ARM64 grim and seatd package for disposable VM only
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo dpkg --add-architecture arm64
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: http://ports.ubuntu.com/ubuntu-ports' \
+            'Suites: noble noble-updates' \
+            'Components: main universe' \
+            'Architectures: arm64' \
+            'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+            | sudo tee /etc/apt/sources.list.d/u15-arm64.sources
+          sudo apt-get update -qq \
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/u15-arm64.sources \
+            -o Dir::Etc::sourceparts=-
+          mkdir -p build/grim-download build/grim-package
+          (cd build/grim-download && apt download grim:arm64)
+          deb=$(find build/grim-download -maxdepth 1 -name 'grim_*_arm64.deb' -print -quit)
+          test -n "$deb"
+          dpkg-deb --extract "$deb" build/grim-package
+          test -s build/grim-package/usr/bin/grim
+          file build/grim-package/usr/bin/grim
+          aarch64-linux-gnu-readelf -h build/grim-package/usr/bin/grim | grep AArch64
+          aarch64-linux-gnu-readelf -d build/grim-package/usr/bin/grim | grep NEEDED || true
+          mkdir -p build/seatd-download build/seatd-package
+          (cd build/seatd-download && apt download seatd:arm64)
+          seatd_deb=$(find build/seatd-download -maxdepth 1 -name 'seatd_*_arm64.deb' -print -quit)
+          test -n "$seatd_deb"
+          dpkg-deb --extract "$seatd_deb" build/seatd-package
+          seatd_bin=$(find build/seatd-package/usr -type f -name seatd -print -quit)
+          test -n "$seatd_bin"
+          file "$seatd_bin" | grep 'ELF 64-bit'
+          aarch64-linux-gnu-readelf -h "$seatd_bin" | grep AArch64
+
+      - name: Make disposable ARM64 Ubuntu rootfs with Labwc, grim, seatd
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u16_prepare_vm.py \
+            --u6 inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img \
+            --output build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img \
+            --probe build/u14-wayland-probe \
+            --gui-script scripts/u16_gui_drm_vm.sh \
+            --grim build/grim-package/usr/bin/grim \
+            --seatd "$(find build/seatd-package/usr -type f -name seatd -print -quit)" \
+            --work output
+          test -s build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img
+          test "$(stat -c %s build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img)" = 2147483648
+
+      - name: Repack U8 guarded initramfs with VM progress instrumentation ONLY
+        shell: bash
+        run: |
+          set -euxo pipefail
+          lz4 -dc inputs/u8/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 > build/u8-original.cpio
+          (cd build/ramdisk && cpio --extract --make-directories --no-absolute-filenames --quiet < ../u8-original.cpio)
+          test -x build/ramdisk/bin/busybox
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static \
+            scripts/u9_rootfs_probe.c -o build/ramdisk/bin/u8-rootfs-probe
+          python3 - <<'PY'
+          from pathlib import Path
+          data=Path('scripts/u8_init').read_text()
+          changes=[
+            ('export PATH=/bin:/sbin','export PATH=/bin:/sbin\necho U14_FIRST_STAGE_STARTED'),
+            ('exec "$BB" switch_root /newroot /sbin/init',
+             'echo U14_REACHED_SWITCH_ROOT\nexec "$BB" switch_root /newroot /sbin/init')
+          ]
+          for old,new in changes:
+            if old not in data: raise SystemExit('U14 instrumentation cannot find: '+old)
+            data=data.replace(old,new,1)
+          Path('build/ramdisk/init').write_text(data)
+          Path('build/ramdisk/init').chmod(0o755)
+          PY
+          sh -n build/ramdisk/init
+          qemu-aarch64-static build/ramdisk/bin/busybox sh -n build/ramdisk/init
+          (cd build/ramdisk && find . -print0 | LC_ALL=C sort -z | \
+            cpio --null --create --format=newc --quiet) | \
+            lz4 -l -z -c > build/u14-QEMU-ONLY-initramfs.cpio.lz4
+          test -s build/u14-QEMU-ONLY-initramfs.cpio.lz4
+
+      - name: Boot ARM64 QEMU with virtio-gpu 2D, capture actual virtual display locally via HMP
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -f build/u16-qmp.sock
+          timeout -k 5 115 qemu-system-aarch64 \
+            -M virt,gic-version=3 -cpu cortex-a72 -smp 2 -m 2048 \
+            -nodefaults -display vnc=127.0.0.1:0 \
+            -qmp unix:build/u16-qmp.sock,server=on,wait=off \
+            -serial stdio -nic none -no-reboot \
+            -kernel build/linux-6.6.89/arch/arm64/boot/Image \
+            -initrd build/u14-QEMU-ONLY-initramfs.cpio.lz4 \
+            -drive if=none,format=raw,readonly=on,file=build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img,id=u16disk \
+            -device virtio-blk-device,drive=u16disk \
+            -device virtio-gpu-pci,max_outputs=1 \
+            -append 'console=ttyAMA0,115200 earlycon=pl011,0x9000000 loglevel=5 rdinit=/init u8.rootuuid=d6b067e7-31e4-4aa3-8edf-d7e70fec0747 u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED systemd.unit=u14-gui.target systemd.log_target=console' \
+            > output/U16_QEMU_SERIAL.log 2>&1 &
+          qemu_pid=$!
+          set +e
+          python3 scripts/u16_hmp_screendump.py \
+            --serial output/U16_QEMU_SERIAL.log \
+            --socket build/u16-qmp.sock \
+            --ppm output/U16_QEMU_GPU.ppm \
+            --png output/U16_QEMU_GPU.png \
+            --log output/U16_HMP.txt
+          capture_rc=$?
+          wait "$qemu_pid"
+          qemu_rc=$?
+          set -e
+          echo "U16_HMP_CAPTURE_EXIT=$capture_rc" | tee output/U16_STATUS.txt
+          echo "U16_QEMU_EXIT=$qemu_rc" | tee -a output/U16_STATUS.txt
+          tail -n 150 output/U16_QEMU_SERIAL.log | grep -v '^[A-Za-z0-9+/]\{70,\}$' | tail -n 70 || true
+          if [ "$qemu_rc" -ne 0 ] && [ "$qemu_rc" -ne 124 ]; then
+            echo "::warning::QEMU returned $qemu_rc; strict verifier will classify"
+          fi
+
+      - name: Recover guest Labwc DRM Wayland PNG if captured
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u16_recover_serial_png.py --log output/U16_QEMU_SERIAL.log \
+            --png output/U16_DRM_WAYLAND.png || echo 'No guest DRM Wayland PNG yet — see strict verifier'
+
+      - name: Classify actual DRM device, compositor Wayland handshake and BOTH independent pixel captures
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u16_assert_drm.py \
+            --log output/U16_QEMU_SERIAL.log \
+            --guest-png output/U16_DRM_WAYLAND.png \
+            --host-png output/U16_QEMU_GPU.png \
+            --u6 inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img \
+            --report-dir output
+          cat output/U16_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload VM logs + reports ONLY, never firmware or flashable binary images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u16-arm64-virtio-gpu-drm-evidence-${{ github.run_number }}
+          path: |
+            output/U16_REPORT.md
+            output/U16_ASSERT.json
+            output/U16_PREP.json
+            output/U16_QEMU_SERIAL.log
+            output/U16_QEMU_GPU.png
+            output/U16_DRM_WAYLAND.png
+            output/U16_HMP.txt
+            output/U16_STATUS.txt
+            output/U16_GENERIC_QEMU_CONFIG.txt
+            output/U16_KERNEL_SHA256.txt
+            output/U15_VM_PREP.json
+          retention-days: 30
+          if-no-files-found: warn
