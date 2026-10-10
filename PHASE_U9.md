@@ -100,3 +100,10 @@ actual Actions logs, not speculative device diagnosis.
 - The generic QEMU kernel cache was again restored correctly; the native ARM64 C probe needs cross architecture libc development headers in addition to the cross-GCC executable.
 - The workflow now explicitly installs `libc6-dev-arm64-cross` and `linux-libc-dev-arm64-cross` before compiling. The host and AArch64 probe binaries still must pass offline U6 ext4 positive and wrong-UUID negative tests before the QEMU boot.
 - **No actual Ubuntu boot success is claimed**. Retry #5 is triggered by this documentation update and must be judged by the new CI logs.
+
+## Retry #6 — correct initramfs output directory
+
+- [Retry #5](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38059627853) passed cross compiler prerequisite installation, and the AArch64 probe compiled through compilation into the linker stage.
+- It then failed at `cannot open output file ramdisk/bin/u8-rootfs-probe: No such file or directory` because `ramdisk/bin` had not yet been created before the probe build stage.
+- Add `mkdir -p ramdisk/bin` before invoking GCC. No source or kernel modifications, no Pixel hardware.
+- This documentation update triggers retry #6; further real QEMU guest boot results remain unverified until the job completes.
