@@ -86,11 +86,12 @@ done
 # pixman/headless output. The image is stored on an isolated QEMU scratch
 # disk and copied back with host debugfs; no guest network or phone data.
 if [ "$finished" -eq 1 ]; then
+    mkdir -p /run/u15-export
     if ! mount -t ext4 /dev/vdb /run/u15-export; then
         echo "U15_FAIL: unable to mount dedicated QEMU-only scratch disk"
         exit 1
     fi
-    if [ ! -x /usr/bin/grim ]; then
+    if [ ! -x /usr/bin/u15-grim ]; then
         echo "U15_FAIL: grim Wayland screenshot client missing"
         exit 1
     fi
@@ -101,7 +102,7 @@ if [ "$finished" -eq 1 ]; then
     waybar_pid=$!
     sleep 5
     echo "U15_CAPTURE_REAL_WAYLAND_FRAME"
-    if WAYLAND_DISPLAY=wayland-0 /usr/bin/grim \
+    if WAYLAND_DISPLAY=wayland-0 /usr/bin/u15-grim \
          -t png /run/u15-export/U15_wayland_screen.png; then
         if [ -s /run/u15-export/U15_wayland_screen.png ]; then
             echo "U15_REAL_WAYLAND_PNG_WRITTEN_TO_VM_SCRATCH"
