@@ -86,3 +86,10 @@ actual Actions logs, not speculative device diagnosis.
 - Add QEMU-only diagnostic logs for `/proc/partitions`, `/dev/vda` existence and direct `blkid /dev/vda`; these **are test instrumentation, not a path hard-coded into a Pixel 8 initramfs**.
 - Retry #2 saved a 14 MB generic QEMU AArch64 kernel as a GitHub Actions cache, so retry #3 should re-use it without recompiling the whole kernel if cache restore succeeds.
 - **No actual mount or Ubuntu boot success is claimed until this retry's guest console proves it.**
+
+## Retry #4 — confirmed missing BusyBox applet, independent ext4 superblock probe
+
+- [Retry #3](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38059080376) failed at rootfs UUID detection. Its serial console **proved the root cause**: `blkid: applet not found` despite the Linux kernel reporting `/dev/vda` for the 2 GiB virtio disk. The earlier BusyBox fallback could never succeed.
+- `scripts/u9_rootfs_probe.c` now contains a small read-only ext4 filesystem metadata checker compiled as a **statically linked ARM64 ELF**. It searches Linux-advertised block devices for **exactly one** matching ext4 magic, requested UUID and `SHIBA_UBUNTU` label; it never formats, mounts or writes.
+- The U8 `/init` source has been updated to call the static binary after requiring the exact boot parameters. The action builds a host variant and a guest AArch64 binary, checking them against the SHA256-pinned U6 `.img` both positively and with an invalid UUID **before starting QEMU**.
+- Retry #4 was launched by this documentation commit. A CI pass still requires actual QEMU guest serial proof of rootfs mount and systemd PID1. The emulator is QEMU `virt`, NOT Pixel 8 hardware.
