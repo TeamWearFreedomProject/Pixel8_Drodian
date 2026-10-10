@@ -1,0 +1,129 @@
+name: Pixel 8 Ubuntu U6 - EXT4 rootfs IMG (NOT BOOTABLE)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U6.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: shiba-u6-rootfs-img-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  U3_SHA: 40944e9e9f9a75d2ce7bb447f3405c6704c26b372cdd85894f2b71572179bd7a
+  IMG: ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img
+  IMAGE_BYTES: "2147483648"
+
+jobs:
+  pack:
+    name: Convert validated U3 Ubuntu GUI rootfs into standalone ext4 IMG
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout research repo
+        uses: actions/checkout@v4
+
+      - name: Download successfully validated Ubuntu U3 GUI archive
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38042365918
+          name: shiba-u3-ubuntu-arm64-gui-NOT-BOOTABLE-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input
+
+      - name: Verify original archive before filesystem creation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rootfs=input/ubuntu-26.04-arm64-u3-gui-NOT-BOOTABLE.tar.xz
+          test -s "$rootfs"
+          echo "$U3_SHA  $rootfs" | sha256sum -c -
+          mkdir -p output
+          df -h /
+
+      - name: Extract trusted rootfs to throwaway runner directory
+        shell: bash
+        run: |
+          set -euxo pipefail
+          root="$RUNNER_TEMP/ubuntu-u6-rootfs"
+          sudo mkdir -p "$root"
+          sudo tar --numeric-owner -xJpf \
+            input/ubuntu-26.04-arm64-u3-gui-NOT-BOOTABLE.tar.xz -C "$root"
+          test -s "$root/usr/lib/os-release"
+          grep -qx 'VERSION_CODENAME=resolute' "$root/usr/lib/os-release"
+          test -x "$root/usr/bin/labwc"
+          test -x "$root/usr/bin/phoc"
+          test -s "$root/etc/shiba-u3/session-research.json"
+          sudo du -sh "$root"
+          echo "U6_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Make a 2GiB raw EXT4 image of the rootfs without loop mounting
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends e2fsprogs
+          img="$GITHUB_WORKSPACE/output/$IMG"
+          truncate -s "$IMAGE_BYTES" "$img"
+          sudo mkfs.ext4 -F -L SHIBA_UBUNTU -m 0 -d "$U6_ROOT" "$img"
+          test "$(stat -c %s "$img")" = "$IMAGE_BYTES"
+          # e2fsck validates metadata; no loop device, mount, or phone needed.
+          sudo e2fsck -f -n "$img"
+          # Read actual file contents from ext4, not just the input tar.
+          debugfs -R "cat /usr/lib/os-release" "$img" 2>/dev/null \
+            | grep -q 'VERSION_CODENAME=resolute'
+          debugfs -R "cat /etc/shiba-u3/session-research.json" "$img" 2>/dev/null \
+            | grep -q '"bootable_phone_firmware": false'
+          debugfs -R "stat /usr/bin/labwc" "$img" 2>/dev/null | grep -q '^Inode:'
+          debugfs -R "stat /usr/bin/phoc" "$img" 2>/dev/null | grep -q '^Inode:'
+          (cd output && sha256sum "$IMG" | tee U6_SHA256SUMS)
+          (cd output && sha256sum -c U6_SHA256SUMS | grep ': OK')
+          sudo dumpe2fs -h "$img" 2>/dev/null \
+            | grep -E 'Filesystem volume name:|Filesystem features:|Block count:|Block size:|Free blocks:' \
+            > output/U6_EXT4_SUPERBLOCK.txt
+          {
+            echo '# Ubuntu U6 - real ext4 root filesystem IMG'
+            echo
+            echo '**PASS: raw ext4 data image created, checked and read back. NOT BOOTABLE. DO NOT FLASH.**'
+            echo
+            echo "Output file: $IMG"
+            echo "Size: $IMAGE_BYTES bytes (2 GiB, intentionally includes free space)"
+            echo 'Filesystem: ext4, volume label SHIBA_UBUNTU'
+            echo 'Source: U3 Ubuntu 26.04 ARM64 Phosh+Labwc tarball (SHA256 verified)'
+            echo 'Metadata: e2fsck -fn passed; OS identity and GUI data read from ext4'
+            echo 'No initramfs, boot.img, partition table, vendor kernel or physical device'
+            echo 'This standalone ext4 image is NOT Android userdata.img'
+            echo
+            echo 'SHA256:'
+            cat output/U6_SHA256SUMS
+          } > output/U6_REPORT.md
+          cat output/U6_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          df -h /
+
+      - name: Upload checks and sizing report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u6-img-verification-${{ github.run_number }}
+          path: |
+            output/U6_REPORT.md
+            output/U6_SHA256SUMS
+            output/U6_EXT4_SUPERBLOCK.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload RAW EXT4 IMG in a compressed GitHub Actions ZIP
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u6-ubuntu-ext4-NOT_BOOTABLE-${{ github.run_number }}
+          path: output/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img
+          retention-days: 7
+          if-no-files-found: error
+          compression-level: 6
