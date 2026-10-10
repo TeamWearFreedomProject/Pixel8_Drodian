@@ -307,7 +307,7 @@ def main():
         "",
         "**NO DEVICE — NOT BOOTABLE — DO NOT FLASH**",
         "",
-        "- Husky: Tensor Linux V1.0 signed-by-digest release ZIP.",
+        "- Husky: Tensor Linux V1.0 archive, SHA256 matched to GitHub release metadata (not a digital signature).",
         "- Shiba: prior Google shusky CI build from Android16 branch; NOT Android17 factory matched.",
         "- No boot, hardware or ABI compatibility is established.",
         "",
