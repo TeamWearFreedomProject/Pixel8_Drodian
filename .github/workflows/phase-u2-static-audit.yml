@@ -2,6 +2,9 @@ name: Pixel 8 Ubuntu U2 - husky vs shiba static audit (BUILD ONLY)
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'PHASE_U2.md'
 
 permissions:
   contents: read
