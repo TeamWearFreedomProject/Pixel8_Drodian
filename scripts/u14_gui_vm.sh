@@ -32,10 +32,13 @@ mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/labwc" "$TMPDIR"
 chmod 0700 "$XDG_RUNTIME_DIR" "$TMPDIR"
 # There is no persistent root filesystem write, no login, no network service.
 echo "U14_STARTING_REAL_LABWC_HEADLESS_BACKEND"
+echo "U14_LOADER_LIBRARY_LIST_BEGIN"
+if [ -x /usr/bin/ldd ]; then /usr/bin/ldd /usr/bin/labwc 2>&1 || :; fi
+echo "U14_LOADER_LIBRARY_LIST_END"
 /usr/bin/labwc --version 2>&1 || :
 [ -r /etc/u14_gui_vm.sh ] && echo "U14_VM_TEST_SCRIPT_ACCESSIBLE"
 [ -e /usr/lib/aarch64-linux-gnu/libwlroots-0.18.so ] && echo "U14_WLROOTS_SHARED_LIBRARY_PRESENT" || :
-/usr/bin/labwc > "$XDG_RUNTIME_DIR/labwc.log" 2>&1 &
+LD_DEBUG=libs,files /usr/bin/labwc > "$XDG_RUNTIME_DIR/labwc.log" 2>&1 &
 labwc_pid=$!
 
 finished=0
@@ -66,9 +69,14 @@ done
 echo "U14_LABWC_DIAGNOSTICS"
 ls -la "$XDG_RUNTIME_DIR" || :
 ls -l /usr/bin/labwc /usr/bin/u14-wayland-probe || :
+exit_code=0
+if ! kill -0 "$labwc_pid" 2>/dev/null; then
+    wait "$labwc_pid" || exit_code=$?
+    echo "U14_LABWC_EXIT_STATUS=$exit_code"
+fi
 echo "U14_LABWC_LOG_START"
 if [ -f "$XDG_RUNTIME_DIR/labwc.log" ]; then
-    tail -n 80 "$XDG_RUNTIME_DIR/labwc.log" || :
+    tail -n 170 "$XDG_RUNTIME_DIR/labwc.log" || :
 fi
 echo "U14_LABWC_LOG_END"
 kill "$labwc_pid" 2>/dev/null || :
