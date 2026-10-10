@@ -44,26 +44,41 @@ esac
 
 # Read-only lookup; never accept an ambiguous path.
 
+# BusyBox blkid supports a minimal interface: unlike util-linux blkid,
+# it does NOT provide "-t UUID=... -o device" or "-s TYPE -o value".
+# Parse exact quoted fields from its read-only default listing instead.
 device=
+device_record=
 retry=0
 while [ "$retry" -lt 8 ]; do
-    candidates=$("$BB" blkid -t "UUID=$root_uuid" -o device 2>/dev/null || :)
-    set -- $candidates
-    if [ "$#" -eq 1 ]; then
-        device=$1
+    listing=$("$BB" blkid 2>/dev/null || :)
+    matches=0
+    while IFS= read -r record; do
+        case "$record" in
+            *"UUID=\"$root_uuid\""*)
+                candidate=${record%%:*}
+                case "$candidate" in /dev/*) ;; *) halt_u8 "unexpected block device path";; esac
+                matches=$((matches + 1))
+                device=$candidate
+                device_record=$record
+                ;;
+        esac
+    done <<EOF
+$listing
+EOF
+    [ "$matches" -le 1 ] || halt_u8 "ambiguous UUID; refusing mount"
+    if [ "$matches" -eq 1 ]; then
         break
     fi
-    [ "$#" -eq 0 ] || halt_u8 "ambiguous UUID; refusing mount"
     retry=$((retry + 1))
     "$BB" sleep 1
 done
 [ -n "$device" ] || halt_u8 "verified Linux root volume not found"
-case "$device" in /dev/*) ;; *) halt_u8 "unexpected block device path";; esac
 [ -b "$device" ] || halt_u8 "not a block device"
-type=$("$BB" blkid -s TYPE -o value "$device" 2>/dev/null || :)
-label=$("$BB" blkid -s LABEL -o value "$device" 2>/dev/null || :)
-[ "$type" = ext4 ] || halt_u8 "not ext4"
-[ "$label" = SHIBA_UBUNTU ] || halt_u8 "Linux filesystem label does not match"
+# An exact field match is required; no guessed Android device paths.
+case "$device_record" in *'TYPE="ext4"'*) ;; *) halt_u8 "not ext4";; esac
+case "$device_record" in *'LABEL="SHIBA_UBUNTU"'*) ;; *)
+    halt_u8 "Linux filesystem label does not match";; esac
 
 "$BB" mkdir -p /newroot
 "$BB" mount -t ext4 -o ro,noload "$device" /newroot ||
