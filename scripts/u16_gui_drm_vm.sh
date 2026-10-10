@@ -16,6 +16,7 @@ export WLR_RENDERER=pixman
 export WLR_RENDERER_ALLOW_SOFTWARE=1
 export WLR_LIBINPUT_NO_DEVICES=1
 export LIBSEAT_BACKEND=seatd
+export SEATD_VTBOUND=0
 export TMPDIR=/run/u16-labwc/tmp
 unset WAYLAND_DISPLAY DISPLAY
 mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/labwc" "$TMPDIR"
@@ -58,7 +59,7 @@ if [ ! -x /usr/bin/u16-seatd ]; then
   exit 1
 fi
 echo U16_SEATD_LAUNCH
-/usr/bin/u16-seatd -n -g root > "$XDG_RUNTIME_DIR/seatd.log" 2>&1 &
+/usr/bin/u16-seatd -g root -l debug > "$XDG_RUNTIME_DIR/seatd.log" 2>&1 &
 seatd_pid=$!
 i=0
 while [ ! -S /run/seatd.sock ] && [ "$i" -lt 10 ]; do
