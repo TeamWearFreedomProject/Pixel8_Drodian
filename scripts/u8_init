@@ -14,6 +14,9 @@ halt_u8() {
 
 # Fail before looking for block devices unless BOTH external parameters exist.
 # Never guess, repartition, or format storage.
+"$BB" mount -t proc proc /proc || halt_u8 "proc unavailable"
+"$BB" mount -t sysfs sysfs /sys || halt_u8 "sysfs unavailable"
+"$BB" mount -t devtmpfs devtmpfs /dev || halt_u8 "devtmpfs unavailable"
 cmdline=$("$BB" cat /proc/cmdline) || halt_u8 "no kernel cmdline"
 root_uuid=
 uuid_count=0
@@ -40,9 +43,6 @@ case "$root_uuid" in
 esac
 
 # Read-only lookup; never accept an ambiguous path.
-"$BB" mount -t proc proc /proc || halt_u8 "proc unavailable"
-"$BB" mount -t sysfs sysfs /sys || halt_u8 "sysfs unavailable"
-"$BB" mount -t devtmpfs devtmpfs /dev || halt_u8 "devtmpfs unavailable"
 
 device=
 retry=0
