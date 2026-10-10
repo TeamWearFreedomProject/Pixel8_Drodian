@@ -64,3 +64,11 @@ procedure is created.
 - U15 now writes the real `grim` screenshot to the existing **writable /run RAM filesystem** inside the guest. A bounded base64 block with explicit markers transfers those original PNG bytes over serial. [Host PNG recovery script](scripts/u15_recover_serial_png.py) reconstructs the actual screenshot, and the pixel verifier still demands nonuniform image content.
 - Optional Waybar launch uses `dbus-run-session` where available to avoid D-Bus autolaunch errors in the service environment.
 - This document edit starts U15 retry #3. No real phone, Android partitions, or kernel/boot flashing.
+
+## Retry #4 — the screenshot is real; update outdated success marker
+
+- [U15 retry #3](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38087983960) **successfully recovered a 1280×720 real Wayland PNG** (9,441 bytes) from the genuine guest QEMU serial log.
+- The pixel validator independently reported **265 sampled colors** and a top-vs-bottom RGB difference **318.8** (minimum required >28), confirming meaningful nonuniform compositor output, not a blank socket or a fabricated image.
+- All checks passed *except* an outdated verifier marker `U15_REAL_WAYLAND_PNG_WRITTEN_TO_VM_SCRATCH`, which belonged to the abandoned scratch-disk transport. The actual PNG used new `U15_PNG_BASE64_BEGIN`, `U15_PNG_BASE64_END` and `U15_REAL_WAYLAND_PNG_SERIALIZED` markers.
+- Updated strict assertion to require all three new markers; independent PNG decoding/dimensions/pixel comparisons remain unchanged. This commit launches **U15 retry #4**, expected to save a screenshot artifact and pass the full CI if all evidence reproduces.
+- This is REAL *headless Wayland screenshot* proof, **NOT virtio GPU VGA nor a real Pixel 8 panel**.
