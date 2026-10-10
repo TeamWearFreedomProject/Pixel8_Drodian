@@ -1,0 +1,98 @@
+name: Pixel 8 Ubuntu U11 - shiba Android16 kernel/vendor ABI readiness (OFFLINE)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U11.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u11-shiba-module-compat-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source-module-compat:
+    name: Compare pinned shiba vendor module manifests to U7 kernel (NO DEVICE)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout offline research tools
+        uses: actions/checkout@v4
+
+      - name: Set up source revision and output directories
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/u11_module_compat_audit.py
+          mkdir -p sources inputs/u7 output
+
+      - name: Download previous experimental boot for SHA256 comparison
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38050847238
+          name: shiba-u7-EXPERIMENTAL-boot-init_boot-DO_NOT_FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u7
+
+      - name: Clone pinned public Evolution X device trees and Lineage module manifests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone -q --depth=1 --branch bka \
+            https://github.com/Evolution-X-Devices/device_google_shusky.git \
+            sources/shusky
+          git clone -q --depth=1 --branch bka \
+            https://github.com/Evolution-X-Devices/device_google_zuma.git \
+            sources/zuma
+          git clone -q --depth=1 --branch lineage-23.2 \
+            https://github.com/LineageOS/android_device_google_shusky-kernels.git \
+            sources/module_manifest
+          test "$(git -C sources/shusky rev-parse HEAD)" = \
+            56006ae8162db285e776d85319d9942945b87194
+          test "$(git -C sources/zuma rev-parse HEAD)" = \
+            fba447c6317f23501dbac209b6479e458800c449
+          test "$(git -C sources/module_manifest rev-parse HEAD)" = \
+            9bba989e7dba6f33258049b113adcb33c89054e8
+          test -s inputs/u7/boot.img
+
+      - name: Run kernel and vendor module readiness analysis (static only)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u11_module_compat_audit.py \
+            --sources sources \
+            --boot inputs/u7/boot.img \
+            --out output
+          python3 -m json.tool output/U11_AUDIT.json >/dev/null
+          grep -Fq 'BINARY ABI NOT PROVEN' output/U11_REPORT.md
+          grep -Fq 'PHONE FLASH READINESS: FALSE' output/U11_REPORT.md
+          python3 - <<'PY'
+          import json
+          with open('output/U11_AUDIT.json') as stream:
+              data=json.load(stream)
+          assert data['flashable'] is False
+          assert data['pixel8_bootable'] is False
+          assert data['driver_ko_binaries_in_source_repo']==0
+          assert data['role_manifest_counts']['modules.load']['entries']>=150
+          assert data['role_manifest_counts']['vendor_dlkm.modules.load']['entries']>=50
+          assert data['shiba_only'] and data['husky_only']
+          print('U11 offline evidence checks passed; hardware ABI remains unknown')
+          PY
+          cat output/U11_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save report, JSON and module inventory (NO binary images)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u11-kernel-vendor-module-audit-${{ github.run_number }}
+          path: |
+            output/U11_REPORT.md
+            output/U11_AUDIT.json
+            output/U11_MODULE_INVENTORY.csv
+          if-no-files-found: warn
+          retention-days: 30
