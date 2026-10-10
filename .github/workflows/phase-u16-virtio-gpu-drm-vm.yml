@@ -89,7 +89,7 @@ jobs:
               -e DRM -e DRM_VIRTIO_GPU -e DRM_KMS_HELPER -e DRM_FBDEV_EMULATION \
               -e PCI -e PCI_HOST_GENERIC -e VIRTIO_PCI
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-            for config in VIRTIO VIRTIO_MMIO VIRTIO_BLK EXT4_FS DEVTMPFS DRM DRM_VIRTIO_GPU; do
+            for config in VIRTIO VIRTIO_MMIO VIRTIO_BLK EXT4_FS DEVTMPFS DRM DRM_VIRTIO_GPU PCI PCI_HOST_GENERIC VIRTIO_PCI; do
               grep -qx "CONFIG_$config=y" .config || { echo "::error::Kernel CONFIG_$config not built-in"; exit 1; }
             done
             make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j4 Image
@@ -209,8 +209,8 @@ jobs:
             -initrd build/u14-QEMU-ONLY-initramfs.cpio.lz4 \
             -drive if=none,format=raw,readonly=on,file=build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img,id=u16disk \
             -device virtio-blk-device,drive=u16disk \
-            -device virtio-gpu-device,max_outputs=1 \
-            -append 'console=ttyAMA0,115200 earlycon=pl011,0x9000000 loglevel=5 rdinit=/init u8.rootuuid=d6b067e7-31e4-4aa3-8edf-d7e70fec0747 u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED systemd.unit=u14-gui.target systemd.log_target=console' \
+            -device virtio-gpu-pci,max_outputs=1 \
+            -append 'console=ttyAMA0,115200 earlycon=pl011,0x9000000 loglevel=7 drm.debug=0x1ff rdinit=/init u8.rootuuid=d6b067e7-31e4-4aa3-8edf-d7e70fec0747 u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED systemd.unit=u14-gui.target systemd.log_target=console' \
             > output/U16_QEMU_SERIAL.log 2>&1 &
           qemu_pid=$!
           set +e
