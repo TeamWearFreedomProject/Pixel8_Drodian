@@ -145,9 +145,9 @@ jobs:
           seatd_deb=$(find build/seatd-download -maxdepth 1 -name 'seatd_*_arm64.deb' -print -quit)
           test -n "$seatd_deb"
           dpkg-deb --extract "$seatd_deb" build/seatd-package
-          seatd_bin=$(find build/seatd-package -type f -name seatd -print -quit)
+          seatd_bin=$(find build/seatd-package/usr -type f -name seatd -print -quit)
           test -n "$seatd_bin"
-          file "$seatd_bin"
+          file "$seatd_bin" | grep 'ELF 64-bit'
           aarch64-linux-gnu-readelf -h "$seatd_bin" | grep AArch64
 
       - name: Make disposable ARM64 Ubuntu rootfs with Labwc, grim, seatd
@@ -160,7 +160,7 @@ jobs:
             --probe build/u14-wayland-probe \
             --gui-script scripts/u16_gui_drm_vm.sh \
             --grim build/grim-package/usr/bin/grim \
-            --seatd "$(find build/seatd-package -type f -name seatd -print -quit)" \
+            --seatd "$(find build/seatd-package/usr -type f -name seatd -print -quit)" \
             --work output
           test -s build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img
           test "$(stat -c %s build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img)" = 2147483648
