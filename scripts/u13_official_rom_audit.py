@@ -122,14 +122,24 @@ def try_read_vendor_modules(imgdir,out):
             f.seek(1080)
             is_ext4=f.read(2)==b"\x53\xef"
         item={"ext4_detected":is_ext4,"extracted_modules":0,"module_vermagic":[]}
-        if not is_ext4:
-            item["extraction_status"]="not plain ext4; do not infer absence of modules"
-            record[name]=item
-            continue
+        with path.open("rb") as f:
+            f.seek(1024)
+            is_erofs=f.read(4)==b"\\xe2\\xe1\\xf5\\xe0"
         target=out/("temporary_"+name+"_modules")
         target.mkdir(parents=True,exist_ok=True)
-        r=subprocess.run(["debugfs","-R",f"rdump /lib/modules {target}",str(path)],
-                         capture_output=True,text=True)
+        if is_ext4:
+            r=subprocess.run(["debugfs","-R",f"rdump /lib/modules {target}",str(path)],
+                             capture_output=True,text=True)
+        elif is_erofs:
+            # Never mount extracted vendor filesystem on the runner or phone.
+            # erofs-utils reads the immutable image and copies it to CI scratch.
+            r=subprocess.run(["fsck.erofs",f"--extract={target}",str(path)],
+                             capture_output=True,text=True)
+        else:
+            item["extraction_status"]="unrecognized filesystem; no module ABI claim"
+            record[name]=item
+            continue
+        item["erofs_detected"]=is_erofs
         mods=sorted(target.rglob("*.ko"))
         item["extracted_modules"]=len(mods)
         item["debugfs_returncode"]=r.returncode
