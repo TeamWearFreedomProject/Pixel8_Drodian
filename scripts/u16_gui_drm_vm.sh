@@ -34,6 +34,12 @@ if [ ! -c /dev/dri/card0 ]; then
   exit 1
 fi
 echo U16_DRM_CARD_PRESENT
+driver_path=$(readlink -f /sys/class/drm/card0/device/driver 2>/dev/null || :)
+echo "U16_DRM_CARD_DRIVER $driver_path"
+case "$driver_path" in
+  *virtio_gpu*) echo U16_VIRTIO_GPU_DRIVER_VERIFIED ;;
+  *) echo U16_FAIL_NOT_VIRTIO_GPU; exit 1 ;;
+esac
 connected=0
 for p in /sys/class/drm/card*-*/status; do
   [ -f "$p" ] || continue
