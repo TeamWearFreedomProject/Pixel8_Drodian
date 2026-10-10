@@ -67,3 +67,11 @@ A further test using a QEMU virtual DRM/virtio GPU (and ultimately shiba
 hardware) is needed before saying a screen displays anything.
 
 **NO FLASHABLE PIXEL 8 UBUNTU IMAGE. DO NOT FLASH.**
+
+## U14 first real QEMU GUI attempt — incomplete
+
+- [U14 run #1](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38065300606) compiled the static ARM64 Wayland protocol probe successfully, verified the SHA256-pinned U6/U8/U9 inputs, created the VM-only rootfs, and booted real AArch64 Linux into Ubuntu systemd.
+- Console logged `U14_FIRST_STAGE_STARTED`, `U14_REACHED_SWITCH_ROOT`, `U14_GUEST_LABWC_TEST_STARTED` and `U14_STARTING_REAL_LABWC_HEADLESS_BACKEND`.
+- The Labwc process exited before a Wayland socket/registry handshake was observed, causing deliberate final CI FAIL. The immediate guest diagnostic file was empty. It **did not demonstrate a working GUI**.
+- The GUI startup tester now waits up to 10 seconds even if the launcher process exits (allowing for a possible fork), prints the binary version and runtime directory, and captures console diagnostics before concluding failure.
+- This update starts **U14 retry #2**. No real phone or vendor drivers are exercised.
