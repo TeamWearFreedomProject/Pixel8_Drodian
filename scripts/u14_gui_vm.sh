@@ -27,6 +27,10 @@ export WLR_HEADLESS_OUTPUTS=1
 export WLR_RENDERER=pixman
 export WLR_RENDERER_ALLOW_SOFTWARE=1
 export WLR_LIBINPUT_NO_DEVICES=1
+# A readonly 2GiB test rootfs does not provide writable /tmp/.X11-unix;
+# disable optional Xwayland for native Wayland-only CI compositor testing.
+export WLR_XWAYLAND=
+echo "U14_XWAYLAND_DISABLED_IN_HEADLESS_GUEST"
 export TMPDIR=/run/u14-labwc/tmp
 unset DISPLAY
 
