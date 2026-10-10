@@ -19,7 +19,9 @@ export XDG_RUNTIME_DIR=/run/u14-labwc
 export XDG_CONFIG_HOME=/run/u14-labwc/config
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=labwc
-export WAYLAND_DISPLAY=wayland-u14
+unset WAYLAND_DISPLAY
+# Let Labwc create its own primary socket: wayland-0 in fresh QEMU guest.
+SOCKET_PATH="$XDG_RUNTIME_DIR/wayland-0"
 export WLR_BACKENDS=headless
 export WLR_HEADLESS_OUTPUTS=1
 export WLR_RENDERER=pixman
@@ -38,15 +40,15 @@ echo "U14_LOADER_LIBRARY_LIST_END"
 /usr/bin/labwc --version 2>&1 || :
 [ -r /etc/u14_gui_vm.sh ] && echo "U14_VM_TEST_SCRIPT_ACCESSIBLE"
 [ -e /usr/lib/aarch64-linux-gnu/libwlroots-0.18.so ] && echo "U14_WLROOTS_SHARED_LIBRARY_PRESENT" || :
-LD_DEBUG=libs,files /usr/bin/labwc > "$XDG_RUNTIME_DIR/labwc.log" 2>&1 &
+/usr/bin/labwc -d > "$XDG_RUNTIME_DIR/labwc.log" 2>&1 &
 labwc_pid=$!
 
 finished=0
 i=0
 while [ "$i" -lt 35 ]; do
-    if [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+    if [ -S "$SOCKET_PATH" ]; then
         echo "U14_REAL_WAYLAND_SOCKET_FOUND"
-        if /usr/bin/u14-wayland-probe "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"; then
+        if /usr/bin/u14-wayland-probe "$SOCKET_PATH"; then
             echo "U14_GUI_HEADLESS_COMPOSITOR_AND_WAYLAND_OK"
             finished=1
             break
