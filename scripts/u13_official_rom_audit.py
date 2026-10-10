@@ -124,7 +124,7 @@ def try_read_vendor_modules(imgdir,out):
         item={"ext4_detected":is_ext4,"extracted_modules":0,"module_vermagic":[]}
         with path.open("rb") as f:
             f.seek(1024)
-            is_erofs=f.read(4)==b"\\xe2\\xe1\\xf5\\xe0"
+            is_erofs=f.read(4)==bytes.fromhex("e2e1f5e0")
         target=out/("temporary_"+name+"_modules")
         target.mkdir(parents=True,exist_ok=True)
         if is_ext4:
