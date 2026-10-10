@@ -68,3 +68,12 @@ Initial build is triggered by creating this plan. Fix any errors using
 actual Actions logs, not speculative device diagnosis.
 
 **DO NOT FLASH. THE U9 KERNEL IS FOR QEMU ONLY.**
+
+## Initial QEMU run and first corrected retry
+
+- [U9 run #1](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38054721534) **failed** final boot assertion; generic Linux 6.6.89 **did compile**, and both QEMU guests booted the Linux kernel and U8 first-stage. The negative no-UUID guest correctly halted.
+- The positive guest enumerated a QEMU-only virtio block disk as `/dev/vda`, then halted with `U8 HALT: verified Linux root volume not found`, before any ext4 mount. This is **not** a Pixel hardware failure.
+- Root cause identified in the U8 first-stage script: `busybox blkid` provides a minimal applet, but the script used util-linux-specific `blkid -t UUID=... -o device` and `blkid -s TYPE -o value` options, causing silent empty lookups.
+- **Correction:** U8 script now parses only explicit UUID/TYPE/LABEL fields from the plain, read-only BusyBox `blkid` listing. UUID and opt-in checks, ext4-only, read-only mount and fail-closed behavior remain.
+- The revised U9 workflow prints a *QEMU-only* block-ID diagnostic and caches the generic QEMU kernel as a reusable CI build artifact. The initial build took approximately 15 minutes; caching avoids needless recompilation on subsequent retries after the cache is created.
+- The first repair rerun is **requested by this documentation update**. Its outcome must be checked separately. Do not claim systemd startup until the positive guest log actually shows it.
