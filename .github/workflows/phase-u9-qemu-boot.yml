@@ -153,7 +153,7 @@ jobs:
               ('    halt_u8 "wrong Ubuntu codename"',
                '    halt_u8 "wrong Ubuntu codename"\necho U9_UBUNTU_RELEASE_VERIFIED'),
               ('    listing=$("$BB" blkid 2>/dev/null || :)',
-               '    listing=$("$BB" blkid 2>/dev/null || :)\necho U9_BLKID_SCAN_BEGIN\necho "$listing"\necho U9_BLKID_SCAN_END'),
+               '    listing=$("$BB" blkid 2>/dev/null || :)\necho U9_DISK_DIAGNOSTIC_BEGIN\n"$BB" cat /proc/partitions\n"$BB" ls -l /dev/vda\n"$BB" blkid /dev/vda || :\necho U9_DISK_DIAGNOSTIC_END'),
               ('exec "$BB" switch_root /newroot /sbin/init',
                'echo U9_SWITCH_ROOT_ATTEMPT\nexec "$BB" switch_root /newroot /sbin/init'),
           ]
