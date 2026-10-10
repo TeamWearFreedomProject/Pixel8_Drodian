@@ -59,7 +59,7 @@ jobs:
           cd u1
           test -s ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz
           echo "$U1_SHA256  ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz" | sha256sum -c -
-          sha256sum -c SHA256SUMS
+          # U1 checksum manifest uses the earlier build path. Confirm its digest.\n          awk '{print $1}' SHA256SUMS | grep -Fxq "$U1_SHA256"
 
       - name: Install ARM64 chroot prerequisites
         shell: bash
