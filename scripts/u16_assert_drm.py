@@ -8,6 +8,12 @@ import json
 from pathlib import Path
 from PIL import Image, ImageStat
 
+def sha256_file(path):
+    h=hashlib.sha256()
+    with path.open("rb") as f:
+        for data in iter(lambda:f.read(4*1024*1024), b""): h.update(data)
+    return h.hexdigest()
+
 def check_png(path):
     if not path.is_file():
         return {"present": False}
@@ -45,7 +51,7 @@ def main():
         "labwc_wayland_client_handshake": "U16_DRM_WAYLAND_PROTOCOL_OK" in log,
         "guest_drm_wayland_png": guest.get("meaningful_content",False) and "U16_DRM_WAYLAND_PNG_SERIALIZED" in log,
         "host_virtual_display_png": host.get("meaningful_content",False),
-        "original_u6_sha256_unchanged": a.u6.is_file() and hashlib.sha256(a.u6.read_bytes()).hexdigest()=="d3cbe5e0a0e170e9e1e3071b32394e0ddd686887351ed1f4aa2b8bed814bde9e",
+        "original_u6_sha256_unchanged": a.u6.is_file() and sha256_file(a.u6)=="d3cbe5e0a0e170e9e1e3071b32394e0ddd686887351ed1f4aa2b8bed814bde9e",
     }
     if all(checks.values()):
         status="PASS_QEMU_VIRTIO_DRM_LABWC_AND_VIRTUAL_DISPLAY"
