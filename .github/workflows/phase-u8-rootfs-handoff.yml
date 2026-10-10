@@ -1,0 +1,164 @@
+name: Pixel 8 Ubuntu U8 - guarded rootfs handoff initramfs (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U8.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: shiba-u8-handoff-research-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  guarded-initramfs:
+    name: Build LZ4 initramfs, audit U6 ext4 and husky reference (NO DEVICE)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout U8 source
+        uses: actions/checkout@v4
+
+      - name: Install host-side archive and emulation tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            lz4 cpio binutils e2fsprogs qemu-user-static curl ca-certificates unzip
+          python3 -m py_compile scripts/u8_verify.py
+          mkdir -p input-u6 input-u7 reference intermediate u8ramdisk output
+          df -h /
+
+      - name: Download known U6 Ubuntu 26.04 ext4 rootfs
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38047914957
+          name: shiba-u6-ubuntu-ext4-NOT_BOOTABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input-u6
+
+      - name: Download earlier U7 research-only init_boot ramdisk
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38050847238
+          name: shiba-u7-EXPERIMENTAL-boot-init_boot-DO_NOT_FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input-u7
+
+      - name: Fetch hash-pinned Pixel 8 Pro Tensor Linux reference ZIP
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 --connect-timeout 20 \
+            'https://github.com/Tenser-Linux/Tensor-Linux/releases/download/V1.0/husky-boot-images.zip' \
+            -o reference/husky-boot-images.zip
+          echo '3ef1f4e6675ffef522d939e5bb7dd9fdb06c6da60cde784b4ec7fe14e99dff9f  reference/husky-boot-images.zip' \
+            | sha256sum -c -
+          unzip -tq reference/husky-boot-images.zip
+
+      - name: Verify original U6 and U7 artifacts before handling them
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo 'd3cbe5e0a0e170e9e1e3071b32394e0ddd686887351ed1f4aa2b8bed814bde9e  input-u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img' \
+            | sha256sum -c -
+          echo '66d4c4f5f797d3809dfbe58b7ba2840daf697cf5aa4f54c42de28f52f86dbe6b  input-u7/init_boot.img' \
+            | sha256sum -c -
+          test "$(stat -c %s input-u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img)" = 2147483648
+          test -s scripts/u8_init
+
+      - name: Extract earlier trusted static ARM64 BusyBox from U7 ramdisk
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import struct
+          from pathlib import Path
+          b=Path('input-u7/init_boot.img').read_bytes()
+          if len(b)<4096 or b[:8]!=b'ANDROID!' or struct.unpack_from('<I',b,40)[0]!=4:
+              raise SystemExit('Unexpected U7 init_boot header')
+          if struct.unpack_from('<I',b,8)[0]!=0:
+              raise SystemExit('U7 init_boot unexpectedly has kernel')
+          n=struct.unpack_from('<I',b,12)[0]
+          raw=b[4096:4096+n]
+          if len(raw)!=n:
+              raise SystemExit('Truncated U7 ramdisk')
+          Path('intermediate/u7-ramdisk.cpio.lz4').write_bytes(raw)
+          PY
+          lz4 -dc intermediate/u7-ramdisk.cpio.lz4 > intermediate/u7-ramdisk.cpio
+          (cd u8ramdisk && cpio -id --no-absolute-filenames --quiet < ../intermediate/u7-ramdisk.cpio)
+          test -x u8ramdisk/bin/busybox
+          test -L u8ramdisk/bin/sh
+          readelf -h u8ramdisk/bin/busybox | grep 'Machine:.*AArch64'
+          qemu-aarch64-static u8ramdisk/bin/busybox echo 'ARM64 BusyBox executes under QEMU'
+
+      - name: Install guarded U8 first-stage script and validate ARM64 shell syntax
+        shell: bash
+        run: |
+          set -euxo pipefail
+          install -m 0755 scripts/u8_init u8ramdisk/init
+          sh -n u8ramdisk/init
+          qemu-aarch64-static u8ramdisk/bin/busybox sh -n u8ramdisk/init
+          grep -Fq 'mount -t ext4 -o ro,noload' u8ramdisk/init
+          grep -Fq 'switch_root /newroot /sbin/init' u8ramdisk/init
+          # Repack initramfs, NOT Android boot or init_boot partition firmware.
+          (cd u8ramdisk && find . -print0 | LC_ALL=C sort -z \
+            | cpio --null -o --format=newc --quiet) \
+            | lz4 -l -z -c > output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4
+          test -s output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4
+          lz4 -dc output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 \
+            | cpio -it --quiet > output/U8_INITRAMFS_FILELIST.txt
+          grep -qx 'init' output/U8_INITRAMFS_FILELIST.txt
+          grep -qx 'bin/busybox' output/U8_INITRAMFS_FILELIST.txt
+
+      - name: Inspect real ext4 contents and compare husky layout; fail on mismatches
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u8_verify.py \
+            --root-img input-u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img \
+            --u7-init-boot input-u7/init_boot.img \
+            --husky-zip reference/husky-boot-images.zip \
+            --init-script scripts/u8_init \
+            --ramdisk output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 \
+            --out output
+          python3 -m json.tool output/U8_AUDIT.json >/dev/null
+          grep -Fq 'NOT bootable and NOT flashable' output/U8_REPORT.md
+          echo 'Research initramfs source present; actual rootfs mount/switch_root NOT executed.' > output/DO_NOT_FLASH.txt
+          echo 'No validated Evolution X KMI, vendor boot, DTBO, or Pixel 8 hardware boot.' >> output/DO_NOT_FLASH.txt
+          sha256sum output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 \
+            > output/U8_SHA256SUMS
+          (cd output && sha256sum -c U8_SHA256SUMS)
+          cat output/U8_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload lightweight research and safety reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u8-mount-handoff-audit-${{ github.run_number }}
+          path: |
+            output/U8_REPORT.md
+            output/U8_AUDIT.json
+            output/U8_INITRAMFS_FILELIST.txt
+            output/U8_SHA256SUMS
+            output/DO_NOT_FLASH.txt
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload initramfs only, not a flashable boot partition
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u8-initramfs-RESEARCH-DO_NOT_FLASH-${{ github.run_number }}
+          path: |
+            output/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4
+            output/DO_NOT_FLASH.txt
+          if-no-files-found: error
+          retention-days: 7
