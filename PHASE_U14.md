@@ -103,3 +103,12 @@ hardware) is needed before saying a screen displays anything.
 - It still exited with code 1 before creating a Wayland socket, so **no compositor Wayland handshake / visible GUI** can yet be claimed.
 - Its `-d` startup log was only approximately 2.7 KB, but the first-30-lines truncation cut off the final cause. The test now writes the **ENTIRE small Labwc debug log** into QEMU guest serial output, retaining the end of startup.
 - This documentation change triggers **U14 retry #6**, which seeks the remaining failure and keeps the pass gate strict.
+
+## U14 retry #6 — Xwayland startup blocking pure headless GUI
+
+- [U14 run #6](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38066738541) printed the full Labwc 0.9.3 `-d` debug log. Headless wlroots, pixman and shm allocator initialized, but it failed when trying to allocate an **Xwayland X11 display**:
+  - `[ERROR] [xwayland/sockets.c:217] No display available in the first 33`
+  - `[ERROR] [../src/xwayland.c:1173] cannot create xwayland server`
+- In this research VM the Ubuntu rootfs is intentionally mounted **read-only**, with writable `/run` and a per-test runtime directory. Optional X11 socket allocation under `/tmp` is not available; this is not evidence of bad Pixel 8 GPU drivers.
+- For the real native-Wayland-only Labwc test, explicitly set `WLR_XWAYLAND=` (disable optional Xwayland per wlroots/Labwc docs). This is a **VM-only runtime environment change**, not a new phone firmware.
+- This commit triggers **U14 retry #7**, which must still validate a real `wl_registry.global` protocol response before claiming the headless compositor succeeded.
