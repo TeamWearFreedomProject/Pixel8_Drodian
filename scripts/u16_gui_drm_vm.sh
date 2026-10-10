@@ -28,7 +28,18 @@ chmod 1777 /tmp/.X11-unix
 echo U16_DRM_ENUMERATION_BEGIN
 ls -la /dev/dri 2>&1 || :
 ls -la /sys/class/drm 2>&1 || :
-dmesg | grep -i -E 'virtio_gpu|virtio-gpu|drm|fbcon|framebuffer' | tail -n 40 || :
+echo U16_VIRTIO_SYSFS_BEGIN
+ls -la /sys/bus/virtio/devices 2>&1 || :
+ls -la /sys/bus/pci/devices 2>&1 || :
+ls -la /sys/bus/virtio/drivers 2>&1 || :
+for node in /sys/bus/virtio/devices/*/device; do
+  [ -r "$node" ] || continue
+  echo "U16_VIRTIO_DEVICE $node $(cat "$node")"
+done
+echo U16_VIRTIO_SYSFS_END
+echo U16_DMESG_DEVICE_PROBE_BEGIN
+dmesg | grep -i -E 'virtio|pci|drm|gpu|fbcon|framebuffer|dma|shmem' | tail -n 110 || :
+echo U16_DMESG_DEVICE_PROBE_END
 echo U16_DRM_ENUMERATION_END
 if [ ! -c /dev/dri/card0 ]; then
   echo U16_FAIL_DRM_CARD_ABSENT
