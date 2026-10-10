@@ -137,7 +137,7 @@ jobs:
         run: |
           set -euxo pipefail
           set +e
-          timeout -k 5 110 qemu-system-aarch64 \
+          timeout -k 5 68 qemu-system-aarch64 \
             -M virt,gic-version=3 -cpu cortex-a72 -smp 2 -m 2048 \
             -nodefaults -display none -monitor none -serial stdio -nic none -no-reboot \
             -kernel inputs/kernel/build/linux-6.6.89/arch/arm64/boot/Image \
@@ -153,6 +153,9 @@ jobs:
             tail -n 100 output/U14_QEMU_SERIAL.log
             exit 1
           fi
+          echo '====== UNFILTERED U14 GUI SECTION ======'
+          sed -n '/U14_GUEST_LABWC_TEST_STARTED/,+160p' output/U14_QEMU_SERIAL.log | head -n 160 || true
+          echo '====== END GUEST GUI SECTION ======'
           grep -E 'U14_|labwc|Wayland|wlroots|systemd|Failed to' \
             output/U14_QEMU_SERIAL.log | tail -n 120 || true
 
