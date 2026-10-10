@@ -32,6 +32,9 @@ mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/labwc" "$TMPDIR"
 chmod 0700 "$XDG_RUNTIME_DIR" "$TMPDIR"
 # There is no persistent root filesystem write, no login, no network service.
 echo "U14_STARTING_REAL_LABWC_HEADLESS_BACKEND"
+/usr/bin/labwc --version 2>&1 || :
+[ -r /etc/u14_gui_vm.sh ] && echo "U14_VM_TEST_SCRIPT_ACCESSIBLE"
+[ -e /usr/lib/aarch64-linux-gnu/libwlroots-0.18.so ] && echo "U14_WLROOTS_SHARED_LIBRARY_PRESENT" || :
 /usr/bin/labwc > "$XDG_RUNTIME_DIR/labwc.log" 2>&1 &
 labwc_pid=$!
 
@@ -47,13 +50,22 @@ while [ "$i" -lt 35 ]; do
         fi
     fi
     if ! kill -0 "$labwc_pid" 2>/dev/null; then
-        echo "U14_GUI_FAIL: labwc exited before protocol handshake"
-        break
+        if [ "$i" -ge 10 ]; then
+            echo "U14_GUI_FAIL: labwc parent exited, no Wayland socket after 10 seconds"
+            break
+        fi
+        # Some compositors fork or daemonize; don't race with startup.
+        if [ "$i" -eq 0 ]; then
+            echo "U14_LABWC_PARENT_EXITED_EARLY_WAITING_FOR_SOCKET"
+        fi
     fi
     sleep 1
     i=$((i+1))
 done
 
+echo "U14_LABWC_DIAGNOSTICS"
+ls -la "$XDG_RUNTIME_DIR" || :
+ls -l /usr/bin/labwc /usr/bin/u14-wayland-probe || :
 echo "U14_LABWC_LOG_START"
 if [ -f "$XDG_RUNTIME_DIR/labwc.log" ]; then
     tail -n 80 "$XDG_RUNTIME_DIR/labwc.log" || :
