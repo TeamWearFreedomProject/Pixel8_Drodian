@@ -83,3 +83,10 @@ hardware) is needed before saying a screen displays anything.
 - GUI script now captures `ldd` shared-library dependencies, Linux dynamic-loader traces (`LD_DEBUG=libs,files`), the real child exit code, and more guest diagnostics.
 - GitHub Actions now prints the **unfiltered** guest GUI serial section; QEMU timeout for these diagnostics is 68 seconds.
 - This document update triggers **U14 retry #3**, still without Pixel 8 hardware or flashable images.
+
+## U14 retry #3 diagnostic — Labwc exists and libraries resolve, but exits 1
+
+- [U14 run #3](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38065994115) reached guest Ubuntu systemd GUI service; `ldd` resolved the ARM64 Labwc/wlroots 0.19 libraries, `labwc --version` printed `labwc 0.9.3`, and the real Labwc command exited with status **1**.
+- No Wayland registry handshake or visible GUI was observed. The guest had produced a very large dynamic-loader trace, and `tail` accidentally retained library unload calls instead of the actual startup error.
+- U14 now reports the **first log lines**, errors filtered by words such as `fail`/`backend`/`renderer`/`seat`, and **recent non-loader** lines separately.
+- This triggers **U14 retry #4** to capture a specific compositor failure instead of guessing. Physical Pixel 8 is still unchanged.
