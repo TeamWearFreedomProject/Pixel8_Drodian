@@ -220,11 +220,11 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          rm -f build/u16-hmp.sock
+          rm -f build/u16-qmp.sock
           timeout -k 5 115 qemu-system-aarch64 \
             -M virt,gic-version=3 -cpu cortex-a72 -smp 2 -m 2048 \
             -nodefaults -display vnc=127.0.0.1:0 \
-            -monitor unix:build/u16-hmp.sock,server=on,wait=off \
+            -qmp unix:build/u16-qmp.sock,server=on,wait=off \
             -serial stdio -nic none -no-reboot \
             -kernel build/linux-6.6.89/arch/arm64/boot/Image \
             -initrd build/u14-QEMU-ONLY-initramfs.cpio.lz4 \
@@ -237,7 +237,7 @@ jobs:
           set +e
           python3 scripts/u16_hmp_screendump.py \
             --serial output/U16_QEMU_SERIAL.log \
-            --socket build/u16-hmp.sock \
+            --socket build/u16-qmp.sock \
             --ppm output/U16_QEMU_GPU.ppm \
             --png output/U16_QEMU_GPU.png \
             --log output/U16_HMP.txt
