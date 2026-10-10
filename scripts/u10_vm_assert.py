@@ -22,7 +22,13 @@ def main():
         "linux_kernel_started":"Linux version 6.6.89" in data,
         "u8_first_stage_started":"U10_INIT_STARTED" in data,
         "u8_switch_root_reached":"U10_REACHED_SWITCH_ROOT" in data,
-        "ubuntu_systemd_appeared":"systemd[1]" in data or "Welcome to Ubuntu" in data,
+        # The isolated target can run before a normal systemd boot banner;
+        # an identified unit spawning /bin/sh and emitting its unique marker
+        # is stronger evidence than relying on a particular banner string.
+        "ubuntu_systemd_appeared":("systemd[1]" in data or
+                                   "Welcome to Ubuntu" in data or
+                                   ("u10-vm-smoke.service:" in data and
+                                    "U10_SYSTEMD_VM_SERVICE_EXECUTED" in data)),
         "guest_systemd_unit_executed":"U10_SYSTEMD_VM_SERVICE_EXECUTED" in data,
         "ubuntu_login_prompt_observed":"login:" in data,
     }
