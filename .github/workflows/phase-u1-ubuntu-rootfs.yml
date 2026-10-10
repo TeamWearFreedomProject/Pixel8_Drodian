@@ -1,0 +1,133 @@
+name: Pixel 8 Ubuntu U1 - ARM64 base rootfs (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preflight = signing/arm64 repository check; bootstrap = build and validate Ubuntu 26.04 arm64 base"
+        required: true
+        type: choice
+        default: preflight
+        options:
+          - preflight
+          - bootstrap
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shiba-ubuntu-u1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ubuntu-base:
+    name: Ubuntu 26.04 ARM64 / ${{ inputs.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout research repository
+        uses: actions/checkout@v4
+
+      - name: Create report directory and install repository signature tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p output
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ubuntu-keyring ca-certificates curl gnupg
+          test -s /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+      - name: Preflight official Ubuntu 26.04 release metadata (signed archive)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl --fail --location --retry 3 --connect-timeout 20 \
+            https://archive.ubuntu.com/ubuntu/dists/resolute/InRelease \
+            -o output/resolute-InRelease
+          gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg \
+            output/resolute-InRelease
+          grep -qx 'Codename: resolute' output/resolute-InRelease
+          awk '/^Architectures:/ {for(i=2;i<=NF;i++) if($i=="arm64") found=1} END {exit !found}' \
+            output/resolute-InRelease
+          printf '%s\n' \
+            '# Ubuntu U1 preflight — Pixel 8 research' \
+            '' \
+            '**PASS: Official Ubuntu Resolute release metadata signature and arm64 architecture verified.**' \
+            '' \
+            '- Mirror: https://archive.ubuntu.com/ubuntu' \
+            '- Suite: resolute (Ubuntu 26.04)' \
+            '- Device: shiba (target only; no hardware access)' \
+            '- Status: BUILD ONLY, NOT BOOTABLE, DO NOT FLASH' \
+            > output/U1_PREFLIGHT.md
+          cat output/U1_PREFLIGHT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install cross-architecture rootfs bootstrap tools
+        if: inputs.mode == 'bootstrap'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get install -y --no-install-recommends \
+            mmdebstrap qemu-user-static binfmt-support arch-test xz-utils
+          sudo update-binfmts --enable qemu-aarch64 || true
+          command -v mmdebstrap
+          command -v qemu-aarch64-static
+          df -h /
+
+      - name: Create real Ubuntu 26.04 arm64 minbase filesystem in temporary CI directory
+        if: inputs.mode == 'bootstrap'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          root="$RUNNER_TEMP/ubuntu-resolute-arm64-rootfs"
+          sudo mkdir -p "$root"
+          sudo mmdebstrap --mode=root --architectures=arm64 \
+            --variant=minbase --components=main \
+            --keyring=/usr/share/keyrings/ubuntu-archive-keyring.gpg \
+            --include=apt,ca-certificates,ubuntu-keyring \
+            resolute "$root" https://archive.ubuntu.com/ubuntu \
+            2>&1 | tee output/U1_BOOTSTRAP.log
+
+          test -s "$root/etc/os-release"
+          test -x "$root/usr/bin/dpkg"
+          grep -qx 'VERSION_CODENAME=resolute' "$root/etc/os-release"
+          arch="$(sudo chroot "$root" /usr/bin/dpkg --print-architecture)"
+          test "$arch" = arm64
+          sudo chroot "$root" /usr/bin/dpkg-query \
+            -W -f='${binary:Package} ${Version}\n' \
+            > output/ubuntu-resolute-arm64-packages.txt
+
+          sudo tar -C "$root" --numeric-owner -cJf \
+            "$GITHUB_WORKSPACE/output/ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz" .
+          sha256sum output/ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz \
+            | tee output/SHA256SUMS
+          sha256sum -c output/SHA256SUMS
+
+          printf '%s\n' \
+            '# Ubuntu U1 bootstrap — Pixel 8 research' \
+            '' \
+            '**SUCCESS: real Ubuntu 26.04 arm64 minbase rootfs built and checked in disposable CI chroot.**' \
+            '' \
+            '- Architecture verified with chroot dpkg: arm64' \
+            '- /etc/os-release: resolute' \
+            '- Package inventory and SHA-256 attached' \
+            '- No GUI, touchscreen, external display, GPU, vendor, boot images or initramfs' \
+            '- NOT BOOTABLE — DO NOT FLASH — BUILD ONLY' \
+            > output/U1_RESULTS.md
+          cat output/U1_RESULTS.md >> "$GITHUB_STEP_SUMMARY"
+          du -h output/ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz
+          df -h /
+
+      - name: Upload research evidence and rootfs, even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-ubuntu-u1-${{ inputs.mode }}-${{ github.run_number }}
+          path: |
+            output/U1_PREFLIGHT.md
+            output/U1_RESULTS.md
+            output/U1_BOOTSTRAP.log
+            output/SHA256SUMS
+            output/ubuntu-resolute-arm64-packages.txt
+            output/ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz
+          if-no-files-found: warn
+          retention-days: 7
