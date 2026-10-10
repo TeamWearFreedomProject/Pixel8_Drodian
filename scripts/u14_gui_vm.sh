@@ -9,7 +9,7 @@ if [ ! -x /usr/bin/labwc ]; then
     echo "U14_GUI_FAIL: labwc binary missing"
     exit 1
 fi
-if [ ! -x /usr/local/libexec/u14-wayland-probe ]; then
+if [ ! -x /usr/bin/u14-wayland-probe ]; then
     echo "U14_GUI_FAIL: wayland probe missing/not executable"
     exit 1
 fi
@@ -40,7 +40,7 @@ i=0
 while [ "$i" -lt 35 ]; do
     if [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
         echo "U14_REAL_WAYLAND_SOCKET_FOUND"
-        if /usr/local/libexec/u14-wayland-probe "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"; then
+        if /usr/bin/u14-wayland-probe "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"; then
             echo "U14_GUI_HEADLESS_COMPOSITOR_AND_WAYLAND_OK"
             finished=1
             break
