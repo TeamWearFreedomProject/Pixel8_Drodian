@@ -56,3 +56,11 @@ procedure is created.
 - [First U15 attempt](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38087630867) failed before VM boot: after enabling arm64 the runner tried its default `security.ubuntu.com` mirror for ARM64 package indexes, causing HTTP 404. No PNG was produced.
 - Corrective change: update only the explicitly configured `ports.ubuntu.com/ubuntu-ports` ARM64 apt source for the screenshot client. No kernel/phone operation and no firmware produced.
 - This doc commit starts retry #2. Pixel test remains QEMU headless screencopy only.
+
+## Retry #3 — read-only virtual scratch workaround
+
+- [U15 retry #2](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38087724563) successfully installed the ARM64 screenshot utility, built the VM copy, and reached real Labwc Wayland protocol handshake.
+- Waybar was launched and the `grim` capture command ran, but the separate QEMU virtual scratch ext4 unexpectedly behaved **read-only** and grim reported `Failed to open file ... Read-only file system`. No PNG screenshot was saved, so the job correctly failed.
+- U15 now writes the real `grim` screenshot to the existing **writable /run RAM filesystem** inside the guest. A bounded base64 block with explicit markers transfers those original PNG bytes over serial. [Host PNG recovery script](scripts/u15_recover_serial_png.py) reconstructs the actual screenshot, and the pixel verifier still demands nonuniform image content.
+- Optional Waybar launch uses `dbus-run-session` where available to avoid D-Bus autolaunch errors in the service environment.
+- This document edit starts U15 retry #3. No real phone, Android partitions, or kernel/boot flashing.
