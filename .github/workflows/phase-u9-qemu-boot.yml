@@ -133,6 +133,29 @@ jobs:
           sha256sum build/linux-6.6.89/arch/arm64/boot/Image > output/U9_KERNEL_SHA256.txt
           cp build/linux-6.6.89/.config output/U9_QEMU_ONLY_KERNEL_CONFIG
 
+      - name: Compile standalone AArch64 ext4 UUID probe and validate it on U6 IMG
+        shell: bash
+        run: |
+          set -euxo pipefail
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static \
+            scripts/u9_rootfs_probe.c -o ramdisk/bin/u8-rootfs-probe
+          gcc -O2 -Wall -Wextra -Werror -static \
+            scripts/u9_rootfs_probe.c -o build/u9-rootfs-probe-host
+          chmod 0755 ramdisk/bin/u8-rootfs-probe
+          readelf -h ramdisk/bin/u8-rootfs-probe | grep 'Machine:.*AArch64'
+          if readelf -l ramdisk/bin/u8-rootfs-probe | grep -q INTERP; then
+            echo '::error::probe must be statically linked'
+            exit 1
+          fi
+          img="$GITHUB_WORKSPACE/inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img"
+          [ "$(build/u9-rootfs-probe-host "$U9_VOLUME_UUID" --image "$img")" = "$img" ]
+          [ "$(qemu-aarch64-static ramdisk/bin/u8-rootfs-probe "$U9_VOLUME_UUID" --image "$img")" = "$img" ]
+          if build/u9-rootfs-probe-host 00000000-0000-0000-0000-000000000000 --image "$img"; then
+            echo '::error::wrong UUID was accepted'
+            exit 1
+          fi
+          sha256sum ramdisk/bin/u8-rootfs-probe > output/U9_ROOTFS_PROBE_SHA256.txt
+
       - name: Repack U8 initramfs with QEMU test markers, no phone-specific firmware
         shell: bash
         run: |
@@ -152,8 +175,8 @@ jobs:
                '    halt_u8 "read-only rootfs mount failed"\necho U9_ROOTFS_READONLY_MOUNTED'),
               ('    halt_u8 "wrong Ubuntu codename"',
                '    halt_u8 "wrong Ubuntu codename"\necho U9_UBUNTU_RELEASE_VERIFIED'),
-              ('    listing=$("$BB" blkid 2>/dev/null || :)',
-               '    listing=$("$BB" blkid 2>/dev/null || :)\necho U9_DISK_DIAGNOSTIC_BEGIN\n"$BB" cat /proc/partitions\n"$BB" ls -l /dev/vda\n"$BB" blkid /dev/vda || :\necho U9_DISK_DIAGNOSTIC_END'),
+              ('device=$(/bin/u8-rootfs-probe "$root_uuid") ||',
+               'echo U9_ROOT_PROBE_BEGIN\n"$BB" cat /proc/partitions\n/bin/u8-rootfs-probe "$root_uuid" || :\necho U9_ROOT_PROBE_END\ndevice=$(/bin/u8-rootfs-probe "$root_uuid") ||'),
               ('exec "$BB" switch_root /newroot /sbin/init',
                'echo U9_SWITCH_ROOT_ATTEMPT\nexec "$BB" switch_root /newroot /sbin/init'),
           ]
@@ -224,6 +247,7 @@ jobs:
             output/U9_KERNEL_SOURCE_SHA256.txt
             output/U9_KERNEL_SHA256.txt
             output/U9_GUEST_RAMDISK_SHA256.txt
+            output/U9_ROOTFS_PROBE_SHA256.txt
             output/U9_U6_EXT4_METADATA.txt
             output/U9_QEMU_ONLY_KERNEL_CONFIG
           if-no-files-found: warn
