@@ -34,7 +34,7 @@ jobs:
           set -euxo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            curl ca-certificates unzip e2fsprogs erofs-utils kmod file binutils
+            curl ca-certificates unzip e2fsprogs erofs-utils kmod file binutils liblzma-dev
           python3 -m py_compile scripts/u13_official_rom_audit.py
           mkdir -p "$RUNNER_TEMP/u13_rom" "$RUNNER_TEMP/u13_partitions" \
                    "$RUNNER_TEMP/u13_report_scratch" u13_reports old_u7
