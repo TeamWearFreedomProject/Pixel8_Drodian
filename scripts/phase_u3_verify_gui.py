@@ -14,7 +14,7 @@ PACKAGES = (
     "phosh", "phoc", "phosh-osk-stevia",
     "labwc", "waybar", "foot", "kanshi", "xwayland", "dbus-user-session"
 )
-BINARIES = ("phosh", "phoc", "labwc", "waybar", "foot", "kanshi")
+BINARIES = ("phoc", "labwc", "waybar", "foot", "kanshi")
 DESKTOP_ENTRY = """[Desktop Entry]
 Name=Ubuntu U3 Labwc Desktop (research)
 Comment=Manual external-desktop candidate; not configured for automatic switching
@@ -129,6 +129,7 @@ def main():
         "",
         "## Architecture checks",
         "- All {} inspected executable ELF headers identify AArch64 (machine 183).".format(len(BINARIES)),
+        "- Phosh is validated by installed arm64 package metadata, not an assumed /usr/bin/phosh ELF path.",
         "- The image includes a manual Labwc Wayland session descriptor.",
         "- Phosh session packages are installed; graphical startup was NOT attempted.",
         "",
