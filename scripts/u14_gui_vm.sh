@@ -36,6 +36,15 @@ unset DISPLAY
 
 mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CONFIG_HOME/labwc" "$TMPDIR"
 chmod 0700 "$XDG_RUNTIME_DIR" "$TMPDIR"
+# The U6 ext4 filesystem remains mounted ro; Xwayland needs /tmp/.X11-unix.
+# Overlay /tmp with an ephemeral tmpfs ONLY inside disposable QEMU VM.
+if ! mount -t tmpfs -o size=32m,mode=1777 tmpfs /tmp; then
+    echo "U14_GUI_FAIL: unable to mount VM-only writable /tmp for Xwayland"
+    exit 1
+fi
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp /tmp/.X11-unix
+echo "U14_QEMU_TMPFS_FOR_XWAYLAND_READY"
 # There is no persistent root filesystem write, no login, no network service.
 echo "U14_STARTING_REAL_LABWC_HEADLESS_BACKEND"
 echo "U14_LOADER_LIBRARY_LIST_BEGIN"
