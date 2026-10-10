@@ -82,46 +82,52 @@ while [ "$i" -lt 35 ]; do
     i=$((i+1))
 done
 
-# U15: capture ACTUAL pixel output via Wayland screencopy from Labwc's
-# pixman/headless output. The image is stored on an isolated QEMU scratch
-# disk and copied back with host debugfs; no guest network or phone data.
+# U15: actual Wayland compositor PNG screencopy into writable /run tmpfs.
+# Encode as base64 over serial console to avoid requiring any writable
+# disk, host mount, guest networking, or phone data access.
 if [ "$finished" -eq 1 ]; then
-    mkdir -p /run/u15-export
-    if ! mount -t ext4 /dev/vdb /run/u15-export; then
-        echo "U15_FAIL: unable to mount dedicated QEMU-only scratch disk"
-        exit 1
-    fi
     if [ ! -x /usr/bin/u15-grim ]; then
         echo "U15_FAIL: grim Wayland screenshot client missing"
         exit 1
     fi
     echo "U15_STARTING_WAYBAR_CLIENT"
-    WAYLAND_DISPLAY=wayland-0 /usr/bin/waybar \
-       -c /etc/u15-waybar.json -s /etc/u15-waybar.css \
-       > "$XDG_RUNTIME_DIR/u15-waybar.log" 2>&1 &
-    waybar_pid=$!
-    sleep 5
-    echo "U15_CAPTURE_REAL_WAYLAND_FRAME"
-    if WAYLAND_DISPLAY=wayland-0 /usr/bin/u15-grim \
-         -t png /run/u15-export/U15_wayland_screen.png; then
-        if [ -s /run/u15-export/U15_wayland_screen.png ]; then
-            echo "U15_REAL_WAYLAND_PNG_WRITTEN_TO_VM_SCRATCH"
-        else
-            echo "U15_FAIL: screenshot file is empty"
-            exit 1
-        fi
+    if [ -x /usr/bin/dbus-run-session ]; then
+        WAYLAND_DISPLAY=wayland-0 /usr/bin/dbus-run-session -- \
+          /usr/bin/waybar -c /etc/u15-waybar.json \
+          -s /etc/u15-waybar.css \
+          > "$XDG_RUNTIME_DIR/u15-waybar.log" 2>&1 &
     else
-        echo "U15_FAIL: real wlroots screencopy request failed"
+        echo "U15_DBUS_RUN_SESSION_MISSING"
+        WAYLAND_DISPLAY=wayland-0 /usr/bin/waybar \
+          -c /etc/u15-waybar.json -s /etc/u15-waybar.css \
+          > "$XDG_RUNTIME_DIR/u15-waybar.log" 2>&1 &
+    fi
+    waybar_pid=$!
+    sleep 6
+    echo "U15_CAPTURE_REAL_WAYLAND_FRAME"
+    screenshot="$XDG_RUNTIME_DIR/u15-wayland-screen.png"
+    if ! WAYLAND_DISPLAY=wayland-0 /usr/bin/u15-grim -t png "$screenshot"; then
+        echo "U15_FAIL: wlroots screencopy failed"
         cat "$XDG_RUNTIME_DIR/u15-waybar.log" || :
         exit 1
     fi
+    if [ ! -s "$screenshot" ]; then
+        echo "U15_FAIL: screenshot file empty"
+        exit 1
+    fi
+    if ! command -v base64 >/dev/null 2>&1; then
+        echo "U15_FAIL: base64 encoder unavailable"
+        exit 1
+    fi
+    echo "U15_PNG_BASE64_BEGIN"
+    base64 "$screenshot"
+    echo "U15_PNG_BASE64_END"
+    echo "U15_REAL_WAYLAND_PNG_SERIALIZED"
     echo "U15_WAYBAR_LOG_START"
     cat "$XDG_RUNTIME_DIR/u15-waybar.log" || :
     echo "U15_WAYBAR_LOG_END"
     kill "$waybar_pid" 2>/dev/null || :
     wait "$waybar_pid" 2>/dev/null || :
-    sync
-    umount /run/u15-export || :
 fi
 
 echo "U14_LABWC_DIAGNOSTICS"
