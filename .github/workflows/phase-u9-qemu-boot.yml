@@ -31,7 +31,7 @@ jobs:
           bash -n scripts/u9_vm_run.sh
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc bison flex build-essential gcc-aarch64-linux-gnu \
+            bc bison flex build-essential gcc-aarch64-linux-gnu libc6-dev-arm64-cross linux-libc-dev-arm64-cross \
             libssl-dev libelf-dev ca-certificates curl xz-utils \
             e2fsprogs qemu-system-arm qemu-user-static cpio lz4
           mkdir -p inputs/u6 inputs/u8 build ramdisk output
