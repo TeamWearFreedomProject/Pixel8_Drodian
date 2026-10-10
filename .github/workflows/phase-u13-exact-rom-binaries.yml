@@ -1,0 +1,152 @@
+name: Pixel 8 Ubuntu U13 - official EvoX 3GB OTA forensic audit (NO PHONE)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U13.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u13-official-shiba-exact-ota-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-exact-ota:
+    name: Download+SHA check 3GB exact ROM and inspect boot/vendor image contents (OFFLINE)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 85
+    env:
+      ROM_NAME: EvolutionX-16.0-20260915-shiba-11.11-Official.zip
+      ROM_SIZE: "3033648565"
+      ROM_SHA256: 41fd43bb5ec5c457906f4e8861aff0442b8670c2164069afbc6015ec31b5f5e0
+      U13_GUEST_FLASHABLE: "false"
+    steps:
+      - name: Checkout U13 forensic source ONLY
+        uses: actions/checkout@v4
+
+      - name: Prepare verified binary analysis scratch directory (outside Git repository)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            curl ca-certificates unzip e2fsprogs erofs-utils kmod file binutils
+          python3 -m py_compile scripts/u13_official_rom_audit.py
+          mkdir -p "$RUNNER_TEMP/u13_rom" "$RUNNER_TEMP/u13_partitions" \
+                   "$RUNNER_TEMP/u13_report_scratch" u13_reports old_u7
+          df -h /
+
+      - name: Get exact U7 RESEARCH boot for controlled comparison only
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38050847238
+          name: shiba-u7-EXPERIMENTAL-boot-init_boot-DO_NOT_FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: old_u7
+
+      - name: Verify official OTA source metadata and separate U7 experimental image
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s old_u7/boot.img
+          echo '1a1f78da7e77457afb406e9cbcffa395c09ffb5120c02fd9f6d3005041651ffa  old_u7/boot.img' | sha256sum -c -
+          echo 'Official byte count: 3033648565'
+          echo 'Official ZIP SHA256: 41fd43bb5ec5c457906f4e8861aff0442b8670c2164069afbc6015ec31b5f5e0'
+          df -h /
+
+      - name: Fetch exact Evolution X 20260915 shiba ZIP DIRECTLY FROM OFFICIAL CDN
+        shell: bash
+        run: |
+          set -euxo pipefail
+          url="https://cdn.evolution-x.org/shiba/16/$ROM_NAME/download"
+          dest="$RUNNER_TEMP/u13_rom/$ROM_NAME"
+          # Must fetch the full official 3GB file; no upload through GitHub UI.
+          curl --fail --location --show-error --silent \
+            --retry 4 --retry-all-errors --retry-delay 10 \
+            --connect-timeout 40 --max-time 3500 \
+            --output "$dest" "$url"
+          test "$(stat -c %s "$dest")" = "$ROM_SIZE"
+          echo "$ROM_SHA256  $dest" | sha256sum -c -
+          file "$dest"
+          df -h /
+          echo 'U13: EXACT 3.03 GB ZIP FULL SHA256 VERIFIED'
+
+      - name: Fetch and pin an offline payload.bin extraction tool source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p tools
+          git init -q tools/payload-dumper-go
+          git -C tools/payload-dumper-go remote add origin \
+            https://github.com/ssut/payload-dumper-go.git
+          git -C tools/payload-dumper-go fetch -q --depth=1 origin \
+            c3a50ba8d784764c06143c1f82971cd81a77f9d6
+          git -C tools/payload-dumper-go checkout -q FETCH_HEAD
+          test "$(git -C tools/payload-dumper-go rev-parse HEAD)" = \
+            c3a50ba8d784764c06143c1f82971cd81a77f9d6
+
+      - name: Install pinned payload-dumper source required Go toolchain
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tools/payload-dumper-go/go.mod
+          cache: true
+          cache-dependency-path: tools/payload-dumper-go/go.sum
+
+      - name: Compile partition extraction tool without using phone or boot chain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          (cd tools/payload-dumper-go && go build -trimpath -o \
+            "$GITHUB_WORKSPACE/tools/payload-dumper-go-offline" .)
+          test -x tools/payload-dumper-go-offline
+          go version
+          df -h /
+
+      - name: Parse exact verified ZIP and extract ONLY 7 selected partitions to throwaway runner
+        shell: bash
+        run: |
+          set -euxo pipefail
+          file="$RUNNER_TEMP/u13_rom/$ROM_NAME"
+          tools/payload-dumper-go-offline \
+            -p boot,init_boot,dtbo,vendor_boot,vendor_kernel_boot,vendor_dlkm,system_dlkm \
+            -o "$RUNNER_TEMP/u13_partitions" "$file"
+          for part in boot init_boot dtbo vendor_boot vendor_kernel_boot vendor_dlkm system_dlkm; do
+            test -s "$RUNNER_TEMP/u13_partitions/$part.img"
+          done
+          du -sh "$RUNNER_TEMP/u13_partitions"
+          df -h /
+
+      - name: Compare official kernel SHA against U7; record only small audit reports
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u13_official_rom_audit.py \
+            --zip "$RUNNER_TEMP/u13_rom/$ROM_NAME" \
+            --images "$RUNNER_TEMP/u13_partitions" \
+            --u7-boot old_u7/boot.img \
+            --out "$RUNNER_TEMP/u13_report_scratch"
+          cp "$RUNNER_TEMP/u13_report_scratch/U13_REPORT.md" u13_reports/
+          cp "$RUNNER_TEMP/u13_report_scratch/U13_AUDIT.json" u13_reports/
+          python3 -m json.tool u13_reports/U13_AUDIT.json >/dev/null
+          grep -Fq 'BOOTABLE PIXEL 8 UBUNTU: UNVERIFIED' u13_reports/U13_REPORT.md
+          grep -Fq 'verified full ZIP SHA256' u13_reports/U13_REPORT.md || \
+            grep -Fq 'Verified full ZIP SHA256' u13_reports/U13_REPORT.md
+          cat u13_reports/U13_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          du -sh u13_reports
+          df -h /
+
+      - name: Upload only non-flashable JSON and Markdown evidence — NEVER image/ROM files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u13-exact-official-rom-binary-evidence-${{ github.run_number }}
+          path: |
+            u13_reports/U13_REPORT.md
+            u13_reports/U13_AUDIT.json
+          retention-days: 30
+          if-no-files-found: warn
