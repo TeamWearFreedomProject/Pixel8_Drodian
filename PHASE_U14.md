@@ -75,3 +75,11 @@ hardware) is needed before saying a screen displays anything.
 - The Labwc process exited before a Wayland socket/registry handshake was observed, causing deliberate final CI FAIL. The immediate guest diagnostic file was empty. It **did not demonstrate a working GUI**.
 - The GUI startup tester now waits up to 10 seconds even if the launcher process exits (allowing for a possible fork), prints the binary version and runtime directory, and captures console diagnostics before concluding failure.
 - This update starts **U14 retry #2**. No real phone or vendor drivers are exercised.
+
+## U14 retry #2 and deeper compositor startup diagnostics
+
+- [U14 retry #2](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38065708768): kernel `switch_root` and systemd GUI service executed, but the Labwc launcher process exited and no Wayland socket appeared after ten seconds. Actual GUI remains **NOT proven**.
+- The original guest stdout filter stripped out nonmatching errors and an empty Labwc log did not reveal why the process quit.
+- GUI script now captures `ldd` shared-library dependencies, Linux dynamic-loader traces (`LD_DEBUG=libs,files`), the real child exit code, and more guest diagnostics.
+- GitHub Actions now prints the **unfiltered** guest GUI serial section; QEMU timeout for these diagnostics is 68 seconds.
+- This document update triggers **U14 retry #3**, still without Pixel 8 hardware or flashable images.
