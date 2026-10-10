@@ -50,3 +50,9 @@ or boot image is involved in this workflow. No unverified Pixel 8 boot
 procedure is created.
 
 **This commit launches U15 run #1. GUI screen on the real Pixel 8: UNVERIFIED.**
+
+## Retry #2 — ARM64 Ubuntu package repository fix
+
+- [First U15 attempt](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38087630867) failed before VM boot: after enabling arm64 the runner tried its default `security.ubuntu.com` mirror for ARM64 package indexes, causing HTTP 404. No PNG was produced.
+- Corrective change: update only the explicitly configured `ports.ubuntu.com/ubuntu-ports` ARM64 apt source for the screenshot client. No kernel/phone operation and no firmware produced.
+- This doc commit starts retry #2. Pixel test remains QEMU headless screencopy only.
