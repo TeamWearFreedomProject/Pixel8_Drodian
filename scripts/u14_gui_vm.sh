@@ -76,7 +76,12 @@ if ! kill -0 "$labwc_pid" 2>/dev/null; then
 fi
 echo "U14_LABWC_LOG_START"
 if [ -f "$XDG_RUNTIME_DIR/labwc.log" ]; then
-    tail -n 170 "$XDG_RUNTIME_DIR/labwc.log" || :
+    echo "U14_LABWC_LOG_FIRST_LINES"
+    head -n 30 "$XDG_RUNTIME_DIR/labwc.log" || :
+    echo "U14_LABWC_LOG_ERROR_LINES"
+    grep -Ei '(error|fatal|fail|unable|not found|cannot|denied|backend|renderer|seat|refus|warning|no such|permission|invalid)' "$XDG_RUNTIME_DIR/labwc.log" | tail -n 100 || :
+    echo "U14_LABWC_LOG_RECENT_NON_LOADER_LINES"
+    grep -Ev '^[[:space:]]*[0-9]+:[[:space:]]*(calling|file=|trying file=|find library=|initialize program|transferring control|symbol=)' "$XDG_RUNTIME_DIR/labwc.log" | tail -n 80 || :
 fi
 echo "U14_LABWC_LOG_END"
 kill "$labwc_pid" 2>/dev/null || :
