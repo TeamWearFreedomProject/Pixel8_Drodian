@@ -87,3 +87,7 @@ References:
 - https://packages.ubuntu.com/resolute/labwc
 - https://packages.ubuntu.com/resolute/phosh-osk-stevia
 - https://packages.ubuntu.com/resolute/kanshi
+
+## CI debug note (2026-10-10)
+
+The first automatic U3 run [38041952779](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38041952779) correctly confirmed the pinned U1 tarball hash but failed on the redundant `SHA256SUMS` invocation: U1's manifest retained its original `output/` directory prefix, which is absent after artifact download. Fixed in the U3 workflow by comparing the manifest digest directly after verifying the tarball. The failure did **not** indicate a corrupt Ubuntu base or a broken GUI. This plan update requests a second automatic CI run.
