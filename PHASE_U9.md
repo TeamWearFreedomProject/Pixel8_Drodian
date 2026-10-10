@@ -77,3 +77,12 @@ actual Actions logs, not speculative device diagnosis.
 - **Correction:** U8 script now parses only explicit UUID/TYPE/LABEL fields from the plain, read-only BusyBox `blkid` listing. UUID and opt-in checks, ext4-only, read-only mount and fail-closed behavior remain.
 - The revised U9 workflow prints a *QEMU-only* block-ID diagnostic and caches the generic QEMU kernel as a reusable CI build artifact. The initial build took approximately 15 minutes; caching avoids needless recompilation on subsequent retries after the cache is created.
 - The first repair rerun is **requested by this documentation update**. Its outcome must be checked separately. Do not claim systemd startup until the positive guest log actually shows it.
+
+## Retry #3 — direct device probing after failed default BusyBox enumeration
+
+- [Retry #2](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38057945071) also failed at the same UUID gate. The generic ARM64 Linux guest kernel compiled and both QEMU instances ran; the second positive serial log printed `U9_BLKID_SCAN_BEGIN/END` with **no listed block device**, then `U8 HALT: verified Linux root volume not found`.
+- Earlier boot logs confirmed the guest Linux kernel enumerated QEMU's virtio-blk disk as `/dev/vda`. Therefore, the next hypothesis is BusyBox's **no-argument blkid enumeration** does not discover it; this remains a hypothesis until explicit probes are logged.
+- Fix in `scripts/u8_init`: when `busybox blkid` returns no listing, enumerate only `/sys/class/block/*` advertised by Linux, and run `busybox blkid <device>` **read-only** on existing block nodes; require an **exact UUID match**, ext4 type and expected `SHIBA_UBUNTU` label. Never format or write partitions; the explicit opt-in gate remains mandatory.
+- Add QEMU-only diagnostic logs for `/proc/partitions`, `/dev/vda` existence and direct `blkid /dev/vda`; these **are test instrumentation, not a path hard-coded into a Pixel 8 initramfs**.
+- Retry #2 saved a 14 MB generic QEMU AArch64 kernel as a GitHub Actions cache, so retry #3 should re-use it without recompiling the whole kernel if cache restore succeeds.
+- **No actual mount or Ubuntu boot success is claimed until this retry's guest console proves it.**
