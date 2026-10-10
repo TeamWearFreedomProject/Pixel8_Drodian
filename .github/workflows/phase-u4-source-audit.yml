@@ -1,0 +1,72 @@
+name: Pixel 8 Ubuntu U4 - DRM, touch and GPU source audit (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U4.md
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shiba-ubuntu-u4-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  static-source-audit:
+    name: Audit pinned upstream source (NO PHONE)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Pixel 8 research project
+        uses: actions/checkout@v4
+
+      - name: Check Python source audit syntax
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/phase_u4_source_audit.py
+
+      - name: Clone exact upstream audit sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p sources output
+          while IFS='|' read -r folder repo branch revision; do
+            test -n "$folder"
+            git clone -q --depth=1 --branch "$branch"               "https://github.com/$repo.git" "sources/$folder"
+            actual="$(git -C "sources/$folder" rev-parse HEAD)"
+            test "$actual" = "$revision" || {
+              echo "::error::Pinned upstream revision differs for $folder: $actual"
+              exit 1
+            }
+            echo "$folder $actual" >> output/U4_SOURCES.txt
+          done <<'EOF'
+          huskyfe|Tenser-Linux/huskyfe|main|be5ea37b183a2ab1f4a8f00278d515de281a5928
+          glproxy|Tenser-Linux/glproxy|main|67be2bd259500b5d65a1e6e28d7110282800f522
+          vkproxy|Tenser-Linux/vkproxy|main|155a11982a271b237e6b1dc4118ff3d5229fce88
+          shusky_legacy|Evolution-XYZ-Devices/device_google_shusky|udc|78c56e881b7e88b7f027445b10cf4bbb0faa5a6a
+          EOF
+
+      - name: Generate evidence-linked hardware readiness report
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/phase_u4_source_audit.py             --sources sources --out output
+          python3 -m json.tool output/U4_AUDIT.json > /dev/null
+          grep -q 'NOT A BOOTABLE PORT' output/U4_REPORT.md
+          grep -q 'FAIL readiness for flashing' output/U4_REPORT.md
+          cat output/U4_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save lightweight source audit reports only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u4-static-source-audit-${{ github.run_number }}
+          path: |
+            output/U4_REPORT.md
+            output/U4_AUDIT.json
+            output/U4_SOURCES.txt
+          if-no-files-found: warn
+          retention-days: 30
