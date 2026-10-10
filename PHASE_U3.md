@@ -91,3 +91,5 @@ References:
 ## CI debug note (2026-10-10)
 
 The first automatic U3 run [38041952779](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38041952779) correctly confirmed the pinned U1 tarball hash but failed on the redundant `SHA256SUMS` invocation: U1's manifest retained its original `output/` directory prefix, which is absent after artifact download. Fixed in the U3 workflow by comparing the manifest digest directly after verifying the tarball. The failure did **not** indicate a corrupt Ubuntu base or a broken GUI. This plan update requests a second automatic CI run.
+
+The second automatic run [38042009219](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38042009219) installed the requested Phosh/Phoc/Stevia/Labwc/Waybar GUI packages successfully, but an overly strict validation assumption required `/usr/bin/phosh` to be a native ELF executable. The checked GUI package is validly installed; the validator now uses Phosh's installed `arm64` package metadata and independently ELF-checks five directly located compositor/desktop utility binaries. This update requests the corrected U3 build.
