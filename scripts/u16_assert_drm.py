@@ -44,7 +44,7 @@ def main():
     checks={
         "qemu_linux_kernel_booted": "Linux version 6.6.89" in log,
         "guarded_ubuntu_rootfs_handoff": "U14_REACHED_SWITCH_ROOT" in log,
-        "virtio_gpu_kernel_device": "U16_DRM_CARD_PRESENT" in log,
+        "virtio_gpu_kernel_device": "U16_DRM_CARD_PRESENT" in log and "U16_VIRTIO_GPU_DRIVER_VERIFIED" in log,
         "drm_connector_connected": "U16_DRM_CONNECTOR_CONNECTED" in log,
         "seatd_session_ready": "U16_SEATD_READY" in log,
         "drm_backend_requested": "U16_LABWC_DRM_ATTEMPT" in log,
