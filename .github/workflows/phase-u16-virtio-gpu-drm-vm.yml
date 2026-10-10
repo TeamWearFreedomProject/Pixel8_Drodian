@@ -5,6 +5,12 @@ on:
   push:
     paths:
       - PHASE_U16.md
+  pull_request:
+    paths:
+      - PHASE_U16.md
+      - .github/workflows/phase-u16-virtio-gpu-drm-vm.yml
+      - scripts/u16_*.py
+      - scripts/u16_*.sh
 
 permissions:
   contents: read
