@@ -59,3 +59,10 @@ shiba-specific integration. It does **NOT** mean Linux can boot Pixel 8,
 run GUI or be safely flashed.
 
 Initial CI is triggered by committing this plan.
+
+## First CI execution and correction
+
+- [U10 #1](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38060486557): static Android16 shiba source/U7 kernel provenance gate **PASSED**.
+- VM job failed at disposable ext4 copy validation: `debugfs` printed its version banner on **stderr** and the Python helper accidentally concatenated stdout/stderr when comparing a newly injected systemd unit with its source. This was a **host-side verification bug**, not a guest boot, kernel or filesystem identity failure.
+- `scripts/u10_prepare_vm.py` now reads only the actual `debugfs` stdout while still detecting errors from both streams.
+- This document change triggers U10 #2. **No physical device, boot partition or Android data is accessed.**
