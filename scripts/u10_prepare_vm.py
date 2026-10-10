@@ -53,11 +53,15 @@ def debugfs(image, cmd, writable=False):
     if writable:
         args.append("-w")
     args += ["-R", cmd, str(image)]
-    text = run(args)
-    if any(x in text for x in ("File not found by ext2_lookup", "Filesystem not open",
-                               "File exists while", "Ext2 inode is invalid")):
-        raise RuntimeError("debugfs error: " + text[-500:])
-    return text
+    p = subprocess.run(args, text=True, capture_output=True)
+    if p.returncode:
+        raise RuntimeError("debugfs failed: " + p.stderr[-700:])
+    if any(x in p.stderr or x in p.stdout for x in
+           ("File not found by ext2_lookup", "Filesystem not open",
+            "File exists while", "Ext2 inode is invalid")):
+        raise RuntimeError("debugfs error: " + (p.stdout+p.stderr)[-700:])
+    # debugfs prints its VERSION banner on stderr even on success.
+    return p.stdout
 
 def main():
     p=argparse.ArgumentParser()
