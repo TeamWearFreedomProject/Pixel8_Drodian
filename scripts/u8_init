@@ -52,6 +52,20 @@ device_record=
 retry=0
 while [ "$retry" -lt 8 ]; do
     listing=$("$BB" blkid 2>/dev/null || :)
+    # Some BusyBox builds do not automatically enumerate virtio block disks.
+    # Enumerate only kernel-advertised block devices; perform explicit,
+    # READ-ONLY blkid probes. Never infer Android userdata from a path.
+    if [ -z "$listing" ]; then
+        for entry in /sys/class/block/*; do
+            [ -e "$entry/dev" ] || continue
+            candidate="/dev/${entry##*/}"
+            [ -b "$candidate" ] || continue
+            item=$("$BB" blkid "$candidate" 2>/dev/null || :)
+            [ -n "$item" ] || continue
+            listing="$listing
+$item"
+        done
+    fi
     matches=0
     while IFS= read -r record; do
         case "$record" in
