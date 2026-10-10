@@ -1,0 +1,85 @@
+#!/bin/sh
+# Ubuntu U8: research-only shiba first-stage mount/handoff candidate.
+# Requires a separately verified ext4 volume, explicit UUID, and opt-in token.
+# This is NOT for any device until kernel/vendor and recovery are proven.
+set -eu
+export PATH=/bin:/sbin
+BB=/bin/busybox
+
+halt_u8() {
+    echo "U8 HALT: $*" >/dev/console 2>/dev/null || :
+    echo "U8 HALT: $*"
+    while :; do "$BB" sleep 60; done
+}
+
+# Fail before looking for block devices unless BOTH external parameters exist.
+# Never guess, repartition, or format storage.
+cmdline=$("$BB" cat /proc/cmdline) || halt_u8 "no kernel cmdline"
+root_uuid=
+uuid_count=0
+consent_count=0
+for token in $cmdline; do
+    case "$token" in
+        u8.rootuuid=*)
+            uuid_count=$((uuid_count + 1))
+            root_uuid=${token#u8.rootuuid=}
+            ;;
+        u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED)
+            consent_count=$((consent_count + 1))
+            ;;
+    esac
+done
+[ "$uuid_count" -eq 1 ] || halt_u8 "requires exactly one u8.rootuuid"
+[ "$consent_count" -eq 1 ] || halt_u8 "research opt-in token missing"
+case "$root_uuid" in
+    ????????-????-????-????-????????????) ;;
+    *) halt_u8 "UUID format rejected";;
+esac
+case "$root_uuid" in
+    *[!0123456789abcdefABCDEF-]*) halt_u8 "invalid UUID characters";;
+esac
+
+# Read-only lookup; never accept an ambiguous path.
+"$BB" mount -t proc proc /proc || halt_u8 "proc unavailable"
+"$BB" mount -t sysfs sysfs /sys || halt_u8 "sysfs unavailable"
+"$BB" mount -t devtmpfs devtmpfs /dev || halt_u8 "devtmpfs unavailable"
+
+device=
+retry=0
+while [ "$retry" -lt 8 ]; do
+    candidates=$("$BB" blkid -t "UUID=$root_uuid" -o device 2>/dev/null || :)
+    set -- $candidates
+    if [ "$#" -eq 1 ]; then
+        device=$1
+        break
+    fi
+    [ "$#" -eq 0 ] || halt_u8 "ambiguous UUID; refusing mount"
+    retry=$((retry + 1))
+    "$BB" sleep 1
+done
+[ -n "$device" ] || halt_u8 "verified Linux root volume not found"
+case "$device" in /dev/*) ;; *) halt_u8 "unexpected block device path";; esac
+[ -b "$device" ] || halt_u8 "not a block device"
+type=$("$BB" blkid -s TYPE -o value "$device" 2>/dev/null || :)
+label=$("$BB" blkid -s LABEL -o value "$device" 2>/dev/null || :)
+[ "$type" = ext4 ] || halt_u8 "not ext4"
+[ "$label" = SHIBA_UBUNTU ] || halt_u8 "Linux filesystem label does not match"
+
+"$BB" mkdir -p /newroot
+"$BB" mount -t ext4 -o ro,noload "$device" /newroot ||
+    halt_u8 "read-only rootfs mount failed"
+
+release=/newroot/usr/lib/os-release
+[ -r "$release" ] || halt_u8 "missing os-release"
+"$BB" grep -qx "ID=ubuntu" "$release" || halt_u8 "wrong distribution"
+"$BB" grep -qx "VERSION_CODENAME=resolute" "$release" ||
+    halt_u8 "wrong Ubuntu codename"
+
+# The U3 rootfs has GUI packages, but no hardware-ready PID1 is proven.
+# Actual handoff may only work after further independently verified integration.
+[ -x /newroot/sbin/init ] || halt_u8 "Ubuntu PID1 missing"
+"$BB" mkdir -p /newroot/proc /newroot/sys /newroot/dev
+"$BB" mount --move /proc /newroot/proc || halt_u8 "proc move failed"
+"$BB" mount --move /sys /newroot/sys || halt_u8 "sys move failed"
+"$BB" mount --move /dev /newroot/dev || halt_u8 "dev move failed"
+exec "$BB" switch_root /newroot /sbin/init
