@@ -96,3 +96,10 @@ hardware) is needed before saying a screen displays anything.
 - [U14 run #4](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38066211416) again reached systemd. Labwc 0.9.3 exited with code 1. `ldd` showed all required shared libraries resolved, but there was no accepted socket; no GUI handshake.
 - The labwc upstream manpage documents `labwc -d` to enable full debug information. The new launch now uses this option, removes noisy `LD_DEBUG`, and **unsets `WAYLAND_DISPLAY` before spawning Labwc** (so it does not attempt a nested connection). The test probes the fresh VM's expected auto-created `wayland-0` socket.
 - [U14 run #5] is triggered by this documentation update. No ROM firmware is generated or flashed.
+
+## U14 retry #5 — actual headless backend and software renderer initialized
+
+- [U14 run #5](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38066452022) showed something important: **Labwc 0.9.3 genuinely initialized wlroots headless backend, pixman renderer, and shm allocator** in the ARM64 Ubuntu VM. That is further GUI infrastructure progress beyond merely executing a binary.
+- It still exited with code 1 before creating a Wayland socket, so **no compositor Wayland handshake / visible GUI** can yet be claimed.
+- Its `-d` startup log was only approximately 2.7 KB, but the first-30-lines truncation cut off the final cause. The test now writes the **ENTIRE small Labwc debug log** into QEMU guest serial output, retaining the end of startup.
+- This documentation change triggers **U14 retry #6**, which seeks the remaining failure and keeps the pass gate strict.
