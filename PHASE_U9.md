@@ -93,3 +93,10 @@ actual Actions logs, not speculative device diagnosis.
 - `scripts/u9_rootfs_probe.c` now contains a small read-only ext4 filesystem metadata checker compiled as a **statically linked ARM64 ELF**. It searches Linux-advertised block devices for **exactly one** matching ext4 magic, requested UUID and `SHIBA_UBUNTU` label; it never formats, mounts or writes.
 - The U8 `/init` source has been updated to call the static binary after requiring the exact boot parameters. The action builds a host variant and a guest AArch64 binary, checking them against the SHA256-pinned U6 `.img` both positively and with an invalid UUID **before starting QEMU**.
 - Retry #4 was launched by this documentation commit. A CI pass still requires actual QEMU guest serial proof of rootfs mount and systemd PID1. The emulator is QEMU `virt`, NOT Pixel 8 hardware.
+
+## Retry #5 — cross-compilation toolchain correction
+
+- [Retry #4](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38059495501) failed BEFORE guest execution while compiling `scripts/u9_rootfs_probe.c`: `fatal error: bits/wordsize.h: No such file or directory`.
+- The generic QEMU kernel cache was again restored correctly; the native ARM64 C probe needs cross architecture libc development headers in addition to the cross-GCC executable.
+- The workflow now explicitly installs `libc6-dev-arm64-cross` and `linux-libc-dev-arm64-cross` before compiling. The host and AArch64 probe binaries still must pass offline U6 ext4 positive and wrong-UUID negative tests before the QEMU boot.
+- **No actual Ubuntu boot success is claimed**. Retry #5 is triggered by this documentation update and must be judged by the new CI logs.
