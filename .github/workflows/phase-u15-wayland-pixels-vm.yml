@@ -1,0 +1,232 @@
+name: Pixel 8 Ubuntu U15 - verified ARM64 Wayland pixels and PNG (QEMU ONLY)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - PHASE_U15.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u15-qemu-pixel-capture-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qemu-real-wayland:
+    name: Real Ubuntu ARM64 Labwc + Waybar draw + Wayland screenshot (NO PIXEL PHONE)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout U14 build-only tests
+        uses: actions/checkout@v4
+
+      - name: Install host and cross-build tools for guest ARM64 Wayland handshake
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross linux-libc-dev-arm64-cross \
+            qemu-system-arm qemu-user-static e2fsprogs lz4 cpio binutils file python3-pil
+          python3 -m py_compile scripts/u14_prepare_gui_vm.py scripts/u14_assert_gui_vm.py scripts/u15_prepare_gui_vm.py scripts/u15_assert_pixels.py
+          sh -n scripts/u14_gui_vm.sh
+          sh -n scripts/u15_gui_capture_vm.sh
+          mkdir -p inputs/u6 inputs/u8 inputs/kernel build/ramdisk output
+          df -h /
+
+      - name: Fetch the real audited U6 Ubuntu 26.04 ARM64 GUI rootfs
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38047914957
+          name: shiba-u6-ubuntu-ext4-NOT_BOOTABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u6
+
+      - name: Fetch U8 ARM64 BusyBox bootloader-independent research initramfs
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38052743722
+          name: shiba-u8-initramfs-RESEARCH-DO_NOT_FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u8
+
+      - name: Fetch U9 generic QEMU-only Linux ARM64 kernel (NOT shiba firmware)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38059787754
+          name: u9-generic-qemu-arm64-kernel-6
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/kernel
+
+      - name: SHA256-verify all prior proven inputs (original IMG remains immutable)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo 'd3cbe5e0a0e170e9e1e3071b32394e0ddd686887351ed1f4aa2b8bed814bde9e  inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img' | sha256sum -c -
+          echo 'dc50919b6a4e89dc8c27d84dee5335105c756573ef3dcf74c3465a414e50372b  inputs/u8/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4' | sha256sum -c -
+          echo '718c5584d0a1a69943c68689c0dadbd9b0ce6623e48e9a1b97429293c41efddc  inputs/kernel/build/linux-6.6.89/arch/arm64/boot/Image' | sha256sum -c -
+
+      - name: Compile actual static AArch64 Wayland client for protocol verification
+        shell: bash
+        run: |
+          set -euxo pipefail
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static \
+            scripts/u14_wayland_probe.c -o build/u14-wayland-probe
+          readelf -h build/u14-wayland-probe | grep -F AArch64
+          if readelf -l build/u14-wayland-probe | grep -q INTERP; then
+            echo '::error::Wayland probe unexpectedly dynamically linked'
+            exit 1
+          fi
+          set +e
+          qemu-aarch64-static build/u14-wayland-probe > output/U14_PROBE_NEGATIVE.log 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -eq 2 ] || exit 1
+          sha256sum build/u14-wayland-probe | tee output/U14_PROBE_SHA256.txt
+
+      - name: Acquire ARM64 grim screenshot client from Ubuntu arm64 package
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo dpkg --add-architecture arm64
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: http://ports.ubuntu.com/ubuntu-ports' \
+            'Suites: noble noble-updates' \
+            'Components: main universe' \
+            'Architectures: arm64' \
+            'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+            | sudo tee /etc/apt/sources.list.d/u15-arm64.sources
+          sudo apt-get update -qq
+          mkdir -p build/grim-download build/grim-package
+          (cd build/grim-download && apt download grim:arm64)
+          deb=$(find build/grim-download -maxdepth 1 -name 'grim_*_arm64.deb' -print -quit)
+          test -n "$deb"
+          dpkg-deb --extract "$deb" build/grim-package
+          test -s build/grim-package/usr/bin/grim
+          file build/grim-package/usr/bin/grim
+          aarch64-linux-gnu-readelf -h build/grim-package/usr/bin/grim | grep AArch64
+          aarch64-linux-gnu-readelf -d build/grim-package/usr/bin/grim | grep NEEDED || true
+
+      - name: Make disposable ARM64 Ubuntu rootfs with Labwc and real screenshot tool
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u15_prepare_gui_vm.py \
+            --u6 inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img \
+            --output build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img \
+            --probe build/u14-wayland-probe \
+            --gui-script scripts/u15_gui_capture_vm.sh \
+            --grim build/grim-package/usr/bin/grim \
+            --work output
+          test -s build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img
+          test "$(stat -c %s build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img)" = 2147483648
+          truncate -s 64M build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img
+          mkfs.ext4 -F -L U15SHOT build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img
+          debugfs -R 'ls -p /' build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img
+
+      - name: Repack U8 guarded initramfs with VM progress instrumentation ONLY
+        shell: bash
+        run: |
+          set -euxo pipefail
+          lz4 -dc inputs/u8/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 > build/u8-original.cpio
+          (cd build/ramdisk && cpio --extract --make-directories --no-absolute-filenames --quiet < ../u8-original.cpio)
+          test -x build/ramdisk/bin/busybox
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static \
+            scripts/u9_rootfs_probe.c -o build/ramdisk/bin/u8-rootfs-probe
+          python3 - <<'PY'
+          from pathlib import Path
+          data=Path('scripts/u8_init').read_text()
+          changes=[
+            ('export PATH=/bin:/sbin','export PATH=/bin:/sbin\necho U14_FIRST_STAGE_STARTED'),
+            ('exec "$BB" switch_root /newroot /sbin/init',
+             'echo U14_REACHED_SWITCH_ROOT\nexec "$BB" switch_root /newroot /sbin/init')
+          ]
+          for old,new in changes:
+            if old not in data: raise SystemExit('U14 instrumentation cannot find: '+old)
+            data=data.replace(old,new,1)
+          Path('build/ramdisk/init').write_text(data)
+          Path('build/ramdisk/init').chmod(0o755)
+          PY
+          sh -n build/ramdisk/init
+          qemu-aarch64-static build/ramdisk/bin/busybox sh -n build/ramdisk/init
+          (cd build/ramdisk && find . -print0 | LC_ALL=C sort -z | \
+            cpio --null --create --format=newc --quiet) | \
+            lz4 -l -z -c > build/u14-QEMU-ONLY-initramfs.cpio.lz4
+          test -s build/u14-QEMU-ONLY-initramfs.cpio.lz4
+
+      - name: Actual QEMU guest boots Labwc + Waybar and copies real Wayland pixels to separate VM scratch disk
+        shell: bash
+        run: |
+          set -euxo pipefail
+          set +e
+          timeout -k 5 75 qemu-system-aarch64 \
+            -M virt,gic-version=3 -cpu cortex-a72 -smp 2 -m 2048 \
+            -nodefaults -display none -monitor none -serial stdio -nic none -no-reboot \
+            -kernel inputs/kernel/build/linux-6.6.89/arch/arm64/boot/Image \
+            -initrd build/u14-QEMU-ONLY-initramfs.cpio.lz4 \
+            -drive if=none,format=raw,readonly=on,file=build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img,id=u14disk \
+            -device virtio-blk-device,drive=u14disk \
+            -drive if=none,format=raw,file=build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img,id=u15scratch \
+            -device virtio-blk-device,drive=u15scratch \
+            -append 'console=ttyAMA0,115200 earlycon=pl011,0x9000000 loglevel=5 rdinit=/init u8.rootuuid=d6b067e7-31e4-4aa3-8edf-d7e70fec0747 u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED systemd.unit=u14-gui.target systemd.log_target=console' \
+            > output/U14_QEMU_SERIAL.log 2>&1
+          rc=$?
+          set -e
+          echo "U14_QEMU_EXIT=$rc" > output/U14_VM_EXIT.txt
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 124 ]; then
+            tail -n 100 output/U14_QEMU_SERIAL.log
+            exit 1
+          fi
+          echo '====== UNFILTERED U14 GUI SECTION ======'
+          sed -n '/U14_GUEST_LABWC_TEST_STARTED/,+160p' output/U14_QEMU_SERIAL.log | head -n 160 || true
+          echo '====== END GUEST GUI SECTION ======'
+          grep -E 'U14_|labwc|Wayland|wlroots|systemd|Failed to' \
+            output/U14_QEMU_SERIAL.log | tail -n 120 || true
+
+      - name: Recover exact Wayland PNG from QEMU-only writable scratch ext4
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # debugfs extracts from the disposable virtual disk without mounting
+          # any filesystem on host and without access to the Pixel 8.
+          debugfs -R 'dump /U15_wayland_screen.png output/U15_wayland_screen.png' \
+            build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img
+          test -s output/U15_wayland_screen.png
+          file output/U15_wayland_screen.png
+
+      - name: Verify actual nonuniform Wayland pixels, not merely a compositor socket
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u15_assert_pixels.py \
+            --log output/U14_QEMU_SERIAL.log \
+            --screenshot output/U15_wayland_screen.png \
+            --u6 inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img \
+            --out output
+          cat output/U15_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload VM logs + reports ONLY, never firmware or flashable binary images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u15-arm64-wayland-pixel-evidence-${{ github.run_number }}
+          path: |
+            output/U15_REPORT.md
+            output/U15_ASSERT.json
+            output/U15_VM_PREP.json
+            output/U15_wayland_screen.png
+            output/U14_ASSERT.json
+            output/U14_VM_ROOTFS_PREP.json
+            output/U14_QEMU_SERIAL.log
+            output/U14_VM_EXIT.txt
+            output/U14_PROBE_SHA256.txt
+            output/U14_PROBE_NEGATIVE.log
+          retention-days: 30
+          if-no-files-found: warn
