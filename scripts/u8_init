@@ -42,57 +42,15 @@ case "$root_uuid" in
     *[!0123456789abcdefABCDEF-]*) halt_u8 "invalid UUID characters";;
 esac
 
-# Read-only lookup; never accept an ambiguous path.
-
-# BusyBox blkid supports a minimal interface: unlike util-linux blkid,
-# it does NOT provide "-t UUID=... -o device" or "-s TYPE -o value".
-# Parse exact quoted fields from its read-only default listing instead.
-device=
-device_record=
-retry=0
-while [ "$retry" -lt 8 ]; do
-    listing=$("$BB" blkid 2>/dev/null || :)
-    # Some BusyBox builds do not automatically enumerate virtio block disks.
-    # Enumerate only kernel-advertised block devices; perform explicit,
-    # READ-ONLY blkid probes. Never infer Android userdata from a path.
-    if [ -z "$listing" ]; then
-        for entry in /sys/class/block/*; do
-            [ -e "$entry/dev" ] || continue
-            candidate="/dev/${entry##*/}"
-            [ -b "$candidate" ] || continue
-            item=$("$BB" blkid "$candidate" 2>/dev/null || :)
-            [ -n "$item" ] || continue
-            listing="$listing
-$item"
-        done
-    fi
-    matches=0
-    while IFS= read -r record; do
-        case "$record" in
-            *"UUID=\"$root_uuid\""*)
-                candidate=${record%%:*}
-                case "$candidate" in /dev/*) ;; *) halt_u8 "unexpected block device path";; esac
-                matches=$((matches + 1))
-                device=$candidate
-                device_record=$record
-                ;;
-        esac
-    done <<EOF
-$listing
-EOF
-    [ "$matches" -le 1 ] || halt_u8 "ambiguous UUID; refusing mount"
-    if [ "$matches" -eq 1 ]; then
-        break
-    fi
-    retry=$((retry + 1))
-    "$BB" sleep 1
-done
-[ -n "$device" ] || halt_u8 "verified Linux root volume not found"
+# Direct read-only ext4 superblock probe; not dependent on BusyBox's
+# optional blkid applet, which is absent from Ubuntu 26.04 busybox-static.
+# Requires a separately built, static AArch64 u8-rootfs-probe helper.
+# No mount/format/device write occurs before exact UUID+ext4+label match.
+[ -x /bin/u8-rootfs-probe ] || halt_u8 "rootfs UUID probe executable missing"
+device=$(/bin/u8-rootfs-probe "$root_uuid") ||
+    halt_u8 "verified Linux root volume not found"
+case "$device" in /dev/*) ;; *) halt_u8 "unexpected block device path";; esac
 [ -b "$device" ] || halt_u8 "not a block device"
-# An exact field match is required; no guessed Android device paths.
-case "$device_record" in *'TYPE="ext4"'*) ;; *) halt_u8 "not ext4";; esac
-case "$device_record" in *'LABEL="SHIBA_UBUNTU"'*) ;; *)
-    halt_u8 "Linux filesystem label does not match";; esac
 
 "$BB" mkdir -p /newroot
 "$BB" mount -t ext4 -o ro,noload "$device" /newroot ||
