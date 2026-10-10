@@ -59,23 +59,6 @@ jobs:
           echo 'Official ZIP SHA256: 41fd43bb5ec5c457906f4e8861aff0442b8670c2164069afbc6015ec31b5f5e0'
           df -h /
 
-      - name: Fetch exact Evolution X 20260915 shiba ZIP DIRECTLY FROM OFFICIAL CDN
-        shell: bash
-        run: |
-          set -euxo pipefail
-          url="https://cdn.evolution-x.org/shiba/16/$ROM_NAME/download"
-          dest="$RUNNER_TEMP/u13_rom/$ROM_NAME"
-          # Must fetch the full official 3GB file; no upload through GitHub UI.
-          curl --fail --location --show-error --silent \
-            --retry 4 --retry-all-errors --retry-delay 10 \
-            --connect-timeout 40 --max-time 3500 \
-            --output "$dest" "$url"
-          test "$(stat -c %s "$dest")" = "$ROM_SIZE"
-          echo "$ROM_SHA256  $dest" | sha256sum -c -
-          file "$dest"
-          df -h /
-          echo 'U13: EXACT 3.03 GB ZIP FULL SHA256 VERIFIED'
-
       - name: Fetch and pin an offline payload.bin extraction tool source
         shell: bash
         run: |
@@ -106,6 +89,23 @@ jobs:
           test -x tools/payload-dumper-go-offline
           go version
           df -h /
+
+      - name: Fetch exact Evolution X 20260915 shiba ZIP DIRECTLY FROM OFFICIAL CDN
+        shell: bash
+        run: |
+          set -euxo pipefail
+          url="https://cdn.evolution-x.org/shiba/16/$ROM_NAME/download"
+          dest="$RUNNER_TEMP/u13_rom/$ROM_NAME"
+          # Must fetch the full official 3GB file; no upload through GitHub UI.
+          curl --fail --location --show-error --silent \
+            --retry 4 --retry-all-errors --retry-delay 10 \
+            --connect-timeout 40 --max-time 3500 \
+            --output "$dest" "$url"
+          test "$(stat -c %s "$dest")" = "$ROM_SIZE"
+          echo "$ROM_SHA256  $dest" | sha256sum -c -
+          file "$dest"
+          df -h /
+          echo 'U13: EXACT 3.03 GB ZIP FULL SHA256 VERIFIED'
 
       - name: Parse exact verified ZIP and extract ONLY 7 selected partitions to throwaway runner
         shell: bash
