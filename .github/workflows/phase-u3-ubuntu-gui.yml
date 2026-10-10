@@ -1,0 +1,193 @@
+name: Pixel 8 Ubuntu U3 - Touch and desktop ARM64 GUI (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "preflight: dependency check; compose: install both GUI stacks and pack Ubuntu userspace"
+        type: choice
+        default: preflight
+        required: true
+        options:
+          - preflight
+          - compose
+  push:
+    paths:
+      - PHASE_U3.md
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: shiba-ubuntu-u3-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  U3_MODE: ${{ github.event_name == 'push' && 'compose' || inputs.mode }}
+  U1_SHA256: ff19b6c8698872f361f75e62a4b71bf979321dcbc59b70d0199721c592c315a1
+
+jobs:
+  gui:
+    name: ARM64 Phosh + Labwc / ${{ github.event_name == 'push' && 'compose' || inputs.mode }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout research sources
+        uses: actions/checkout@v4
+
+      - name: Validate Python audit script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile scripts/phase_u3_verify_gui.py
+
+      - name: Fetch verified Ubuntu U1 base from previous CI build
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 38033533558
+          name: shiba-ubuntu-u1-bootstrap-2
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: u1
+
+      - name: Verify U1 rootfs checksum before further work
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          cd u1
+          test -s ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz
+          echo "$U1_SHA256  ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz" | sha256sum -c -
+          sha256sum -c SHA256SUMS
+
+      - name: Install ARM64 chroot prerequisites
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-user-static binfmt-support xz-utils
+          sudo update-binfmts --enable qemu-aarch64 || true
+          command -v qemu-aarch64-static
+          df -h /
+
+      - name: Create disposable Ubuntu rootfs and configure official main/universe repository
+        shell: bash
+        run: |
+          set -euxo pipefail
+          root="$RUNNER_TEMP/shiba-u3-ubuntu"
+          sudo mkdir -p "$root"
+          sudo tar -xJf u1/ubuntu-26.04-resolute-arm64-minbase-UNVERIFIED.tar.xz -C "$root"
+          test -s "$root/etc/os-release"
+          grep -qx 'VERSION_CODENAME=resolute' "$root/etc/os-release"
+          test "$(sudo chroot "$root" dpkg --print-architecture)" = arm64
+          test -s "$root/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+          sudo rm -f "$root/etc/apt/sources.list"
+          sudo mkdir -p "$root/etc/apt/sources.list.d"
+          sudo find "$root/etc/apt/sources.list.d" -maxdepth 1 -type f \
+            \( -name '*.sources' -o -name '*.list' \) -delete
+          sudo tee "$root/etc/apt/sources.list.d/shiba-u3.sources" >/dev/null <<'EOF'
+          Types: deb
+          URIs: https://archive.ubuntu.com/ubuntu
+          Suites: resolute
+          Components: main universe
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo mkdir -p "$root/usr/sbin"
+          sudo tee "$root/usr/sbin/policy-rc.d" >/dev/null <<'EOF'
+          #!/bin/sh
+          exit 101
+          EOF
+          sudo chmod 755 "$root/usr/sbin/policy-rc.d"
+          echo "U3_ROOT=$root" >> "$GITHUB_ENV"
+
+      - name: Refresh package lists inside ARM64 Ubuntu and check GUI candidates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo chroot "$U3_ROOT" env DEBIAN_FRONTEND=noninteractive \
+            apt-get update -qq 2>&1 | tee output/U3_APT_UPDATE.log
+          packages=(phosh phoc phosh-osk-stevia labwc waybar foot kanshi xwayland dbus-user-session)
+          for pkg in "${packages[@]}"; do
+            sudo chroot "$U3_ROOT" apt-cache show "$pkg" >/dev/null || {
+              echo "::error::Package not found: $pkg"
+              exit 1
+            }
+            sudo chroot "$U3_ROOT" apt-cache policy "$pkg" | head -n 12
+          done
+          cat > output/U3_PREFLIGHT.md <<'EOF'
+          # Ubuntu U3 preflight
+
+          **PASS: GUI packages appear in the Ubuntu 26.04 arm64 main/universe repository.**
+
+          - Phone candidate: Phosh + Phoc + Stevia keyboard.
+          - Desktop candidate: Labwc + Waybar + Foot + Kanshi.
+          - No DRM, touchscreen, monitor, GPU or physical Pixel verification.
+          - BUILD ONLY; not bootable.
+          EOF
+          cat output/U3_PREFLIGHT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install both ARM64 Wayland GUI stacks inside temporary rootfs
+        if: env.U3_MODE == 'compose'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo chroot "$U3_ROOT" env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends \
+            phosh phoc phosh-osk-stevia labwc waybar foot kanshi \
+            xwayland dbus-user-session \
+            2>&1 | tee output/U3_GUI_INSTALL.log
+
+      - name: Audit installed ARM64 GUI and add non-bootable manual session metadata
+        if: env.U3_MODE == 'compose'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo python3 scripts/phase_u3_verify_gui.py \
+            --root "$U3_ROOT" --out "$GITHUB_WORKSPACE/output"
+          test -s output/U3_REPORT.md
+          python3 -m json.tool output/U3_METADATA.json >/dev/null
+          sudo chroot "$U3_ROOT" dpkg --print-architecture | grep -qx arm64
+          sudo chroot "$U3_ROOT" dpkg-query -W > output/U3_INSTALLED_PACKAGES.txt
+          cat output/U3_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package ONLY Ubuntu userspace filesystem and checksums
+        if: env.U3_MODE == 'compose'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo rm -f "$U3_ROOT/usr/sbin/policy-rc.d"
+          sudo chroot "$U3_ROOT" apt-get clean
+          sudo rm -rf "$U3_ROOT/var/lib/apt/lists/"*
+          sudo tar -C "$U3_ROOT" --numeric-owner -cJf \
+            "$GITHUB_WORKSPACE/output/ubuntu-26.04-arm64-u3-gui-NOT-BOOTABLE.tar.xz" .
+          (cd output && sha256sum ubuntu-26.04-arm64-u3-gui-NOT-BOOTABLE.tar.xz | tee U3_SHA256SUMS)
+          (cd output && sha256sum -c U3_SHA256SUMS)
+          du -h output/ubuntu-26.04-arm64-u3-gui-NOT-BOOTABLE.tar.xz
+          df -h /
+
+      - name: Upload reproducibility reports (no hardware binaries)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u3-audit-${{ github.run_number }}
+          path: |
+            output/U3_PREFLIGHT.md
+            output/U3_REPORT.md
+            output/U3_METADATA.json
+            output/U3_SHA256SUMS
+            output/U3_INSTALLED_PACKAGES.txt
+            output/U3_APT_UPDATE.log
+            output/U3_GUI_INSTALL.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload Ubuntu GUI rootfs (NEVER boot images)
+        if: success() && env.U3_MODE == 'compose'
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-u3-ubuntu-arm64-gui-NOT-BOOTABLE-${{ github.run_number }}
+          path: output/ubuntu-26.04-arm64-u3-gui-NOT-BOOTABLE.tar.xz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
