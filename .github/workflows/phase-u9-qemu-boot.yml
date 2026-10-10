@@ -81,7 +81,17 @@ jobs:
           test -x build/linux-6.6.89/scripts/config
           df -h /
 
+      - name: Restore previously compiled generic QEMU kernel cache
+        id: guest-kernel-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/linux-6.6.89/arch/arm64/boot/Image
+            build/linux-6.6.89/.config
+          key: u9-generic-qemu-aarch64-linux-6.6.89-kconfig-v1
+
       - name: Build custom generic ARM64 kernel with required guest filesystem drivers built in
+        if: steps.guest-kernel-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -euxo pipefail
@@ -105,6 +115,24 @@ jobs:
           cp .config "$GITHUB_WORKSPACE/output/U9_QEMU_ONLY_KERNEL_CONFIG"
           df -h /
 
+      - name: Cache compiled guest kernel for future quick QEMU retries
+        if: steps.guest-kernel-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/linux-6.6.89/arch/arm64/boot/Image
+            build/linux-6.6.89/.config
+          key: u9-generic-qemu-aarch64-linux-6.6.89-kconfig-v1
+
+      - name: Verify cached or newly built guest kernel
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s build/linux-6.6.89/arch/arm64/boot/Image
+          test -s build/linux-6.6.89/.config
+          sha256sum build/linux-6.6.89/arch/arm64/boot/Image > output/U9_KERNEL_SHA256.txt
+          cp build/linux-6.6.89/.config output/U9_QEMU_ONLY_KERNEL_CONFIG
+
       - name: Repack U8 initramfs with QEMU test markers, no phone-specific firmware
         shell: bash
         run: |
@@ -124,6 +152,8 @@ jobs:
                '    halt_u8 "read-only rootfs mount failed"\necho U9_ROOTFS_READONLY_MOUNTED'),
               ('    halt_u8 "wrong Ubuntu codename"',
                '    halt_u8 "wrong Ubuntu codename"\necho U9_UBUNTU_RELEASE_VERIFIED'),
+              ('    listing=$("$BB" blkid 2>/dev/null || :)',
+               '    listing=$("$BB" blkid 2>/dev/null || :)\\necho U9_BLKID_SCAN_BEGIN\\nprintf "%s\\\\n" "$listing"\\necho U9_BLKID_SCAN_END'),
               ('exec "$BB" switch_root /newroot /sbin/init',
                'echo U9_SWITCH_ROOT_ATTEMPT\nexec "$BB" switch_root /newroot /sbin/init'),
           ]
@@ -167,6 +197,18 @@ jobs:
             --out output
           python3 -m json.tool output/U9_RESULTS.json >/dev/null
           cat output/U9_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Archive the reusable QEMU-only kernel (not a Pixel kernel)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u9-generic-qemu-arm64-kernel-${{ github.run_number }}
+          path: |
+            build/linux-6.6.89/arch/arm64/boot/Image
+            output/U9_QEMU_ONLY_KERNEL_CONFIG
+            output/U9_KERNEL_SHA256.txt
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Keep only QEMU logs, generic kernel config and evidence (not any phone image)
         if: always()
