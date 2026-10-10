@@ -31,7 +31,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu libc6-dev-arm64-cross linux-libc-dev-arm64-cross \
             qemu-system-arm qemu-user-static e2fsprogs lz4 cpio binutils file python3-pil
-          python3 -m py_compile scripts/u14_prepare_gui_vm.py scripts/u14_assert_gui_vm.py scripts/u15_prepare_gui_vm.py scripts/u15_assert_pixels.py
+          python3 -m py_compile scripts/u14_prepare_gui_vm.py scripts/u14_assert_gui_vm.py scripts/u15_prepare_gui_vm.py scripts/u15_assert_pixels.py scripts/u15_recover_serial_png.py
           sh -n scripts/u14_gui_vm.sh
           sh -n scripts/u15_gui_capture_vm.sh
           mkdir -p inputs/u6 inputs/u8 inputs/kernel build/ramdisk output
@@ -129,9 +129,6 @@ jobs:
             --work output
           test -s build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img
           test "$(stat -c %s build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img)" = 2147483648
-          truncate -s 64M build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img
-          mkfs.ext4 -F -L U15SHOT build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img
-          debugfs -R 'ls -p /' build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img
 
       - name: Repack U8 guarded initramfs with VM progress instrumentation ONLY
         shell: bash
@@ -175,8 +172,6 @@ jobs:
             -initrd build/u14-QEMU-ONLY-initramfs.cpio.lz4 \
             -drive if=none,format=raw,readonly=on,file=build/U14_QEMU_TEMP_GUI_ROOTFS_NOT_PIXEL8.img,id=u14disk \
             -device virtio-blk-device,drive=u14disk \
-            -drive if=none,format=raw,file=build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img,id=u15scratch \
-            -device virtio-blk-device,drive=u15scratch \
             -append 'console=ttyAMA0,115200 earlycon=pl011,0x9000000 loglevel=5 rdinit=/init u8.rootuuid=d6b067e7-31e4-4aa3-8edf-d7e70fec0747 u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED systemd.unit=u14-gui.target systemd.log_target=console' \
             > output/U14_QEMU_SERIAL.log 2>&1
           rc=$?
@@ -192,14 +187,13 @@ jobs:
           grep -E 'U14_|labwc|Wayland|wlroots|systemd|Failed to' \
             output/U14_QEMU_SERIAL.log | tail -n 120 || true
 
-      - name: Recover exact Wayland PNG from QEMU-only writable scratch ext4
+      - name: Recover REAL guest Wayland pixel screenshot from QEMU serial
         shell: bash
         run: |
           set -euxo pipefail
-          # debugfs extracts from the disposable virtual disk without mounting
-          # any filesystem on host and without access to the Pixel 8.
-          debugfs -R 'dump /U15_wayland_screen.png output/U15_wayland_screen.png' \
-            build/U15_QEMU_ONLY_SCREENSHOT_SCRATCH.img
+          python3 scripts/u15_recover_serial_png.py \
+            --log output/U14_QEMU_SERIAL.log \
+            --png output/U15_wayland_screen.png
           test -s output/U15_wayland_screen.png
           file output/U15_wayland_screen.png
 
