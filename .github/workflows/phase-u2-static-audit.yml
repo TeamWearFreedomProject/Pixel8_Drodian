@@ -1,0 +1,77 @@
+name: Pixel 8 Ubuntu U2 - husky vs shiba static audit (BUILD ONLY)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: shiba-ubuntu-u2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    name: Inspect upstream boot images (NO PHONE)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout research-only scripts
+        uses: actions/checkout@v4
+
+      - name: Check Python syntax and install metadata inspection tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/phase_u2_static_compare.py
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends curl ca-certificates lz4 kmod gzip xz-utils
+          mkdir -p external output
+
+      - name: Download official Pixel 8 Pro Tensor Linux V1.0 release
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 --connect-timeout 20 \
+            https://github.com/Tenser-Linux/Tensor-Linux/releases/download/V1.0/husky-boot-images.zip \
+            -o external/husky-boot-images.zip
+          echo '3ef1f4e6675ffef522d939e5bb7dd9fdb06c6da60cde784b4ec7fe14e99dff9f  external/husky-boot-images.zip' \
+            | sha256sum -c -
+          stat -c 'Verified husky ZIP: %s bytes' external/husky-boot-images.zip
+
+      - name: Download existing Google shusky experimental Pixel 8 CI build
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 37721346230
+          name: shiba-shusky-UNVERIFIED-BUILD-ONLY-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          path: external/shiba-google-ci
+
+      - name: Verify and compare boot metadata without creating new images
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s external/shiba-google-ci/boot.img
+          test -s external/shiba-google-ci/dtbo.img
+          python3 scripts/phase_u2_static_compare.py \
+            --husky-zip external/husky-boot-images.zip \
+            --husky-sha256 3ef1f4e6675ffef522d939e5bb7dd9fdb06c6da60cde784b4ec7fe14e99dff9f \
+            --shiba-dir external/shiba-google-ci \
+            --out output
+          test -s output/U2_METADATA.json
+          test -s output/U2_REPORT.md
+          python3 -m json.tool output/U2_METADATA.json > /dev/null
+          cat output/U2_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Store ONLY reports (no boot images or firmware binaries)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiba-ubuntu-u2-static-report-${{ github.run_number }}
+          path: |
+            output/U2_METADATA.json
+            output/U2_REPORT.md
+          retention-days: 30
+          if-no-files-found: warn
