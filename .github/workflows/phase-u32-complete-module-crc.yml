@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/phase-u32-complete-module-crc.yml
       - scripts/u32_full_module_crc_audit.py
+      - scripts/u32_legacy_module_origin.py
       - PHASE_U32.md
   workflow_dispatch:
 
@@ -57,6 +58,7 @@ jobs:
             scripts/u30_fix_rtl8150_defconfig.py \
             scripts/u31_offline_abi_audit.py \
             scripts/u32_full_module_crc_audit.py \
+            scripts/u32_legacy_module_origin.py \
             scripts/u28_watchdog_kmi_build.py \
             scripts/u25_source_only_shusky.py
           df -h /
@@ -269,6 +271,24 @@ jobs:
             output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.md
           cat output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.md >> "$GITHUB_STEP_SUMMARY"
 
+
+      - name: U32 diagnose exact origin of old 6.1.124 modules even when CRC coverage gate fails
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if test -s output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.json; then
+            python3 scripts/u32_legacy_module_origin.py \
+              --src shusky-src --out output/u32 \
+              --previous output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.json
+            grep -Fq 'REAL DEVICE FLASH GATE DENY' \
+              output/u32/U32_OLD_GKI_MODULE_ORIGINS.md
+            cat output/u32/U32_OLD_GKI_MODULE_ORIGINS.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '%s\n' \
+              'U32 origin diagnostics unavailable: preceding full-build/CRC audit did not produce a report; no compatibility claimed.' \
+              > output/u32/U32_ORIGINS_UNAVAILABLE.txt
+          fi
 
       - name: Preserve research diagnostic evidence only and discard build binaries
         if: always()
