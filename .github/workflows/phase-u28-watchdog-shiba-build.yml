@@ -98,7 +98,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: evidence/u27
 
-      - name: Apply exactly reviewed USB and watchdog source adaptations (CI-only)
+      - name: Guarded USB, watchdog, and BMS local MAX macro fixes (CI-only)
         shell: bash
         run: |
           set -euxo pipefail
@@ -114,6 +114,10 @@ jobs:
             > output/u28/U28_OPTIONAL_USB_NIC_SOURCE_DIFF.txt
           git -C shusky-src/private/google-modules/soc/gs diff \
             > output/u28/U28_VENDOR_USB_AND_WDT_SOURCE_DIFF.txt
+          git -C shusky-src/private/google-modules/bms diff -- google_dual_batt_gauge.c \
+            > output/u28/U28_BATTERY_LOCAL_MAX_SOURCE_DIFF.txt
+          test -s output/u28/U28_BATTERY_LOCAL_MAX_SOURCE_DIFF.txt
+          test -s output/u28/U28_BMS_MAX_MACRO_PATCH.json
           test -s output/u28/U28_VENDOR_USB_AND_WDT_SOURCE_DIFF.txt
           test -s output/u28/U28_OPTIONAL_USB_NIC_SOURCE_DIFF.txt
           cat output/u28/U28_WATCHDOG_PATCH.json >> "$GITHUB_STEP_SUMMARY"
