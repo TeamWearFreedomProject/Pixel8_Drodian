@@ -96,6 +96,7 @@ jobs:
           python3 scripts/u30_fix_rtl8150_defconfig.py \
             --src shusky-src --out output/u30-build
           test -s output/u30-build/U30_OPTIONAL_RTL8150_CONFIG_DIFF.txt
+          test -s output/u30-build/U30_OPTIONAL_RTL8150_GKI_MODULE_OUTS_DIFF.txt
           python3 scripts/u28_watchdog_kmi_build.py patch \
             --src shusky-src --u27 evidence/u27/U27_KMI_WATCHDOG_DIAGNOSIS.json \
             --out output/u30-build
