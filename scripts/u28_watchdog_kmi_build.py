@@ -334,6 +334,84 @@ def patch_mali_gpu_minmax_compat(src, out):
     print(json.dumps(report,indent=2))
 
 
+def patch_goodix_touch_local_max(src, out):
+    """Keep the real Goodix touch module. Rename only its legacy local MAX.
+
+    The observed old source and upstream kernel definition are both checked.
+    This is a source-only CI experiment; neither driver behavior nor on-device
+    touch compatibility is proven by a successful compiler exit.
+    """
+    module_dir=src/"private/google-modules/touch/goodix"
+    source=module_dir/"goodix_ts_inspect.c"
+    if not source.is_file():
+        abort("Goodix touchscreen inspection source missing")
+    before=source.read_text()
+    old_definitions=re.findall(
+        r"(?m)^[ \t]*#[ \t]*define[ \t]+MAX[ \t]*\([^\r\n]*$",before)
+    if len(old_definitions)!=1:
+        abort("unexpected count of Goodix legacy MAX definitions")
+    observed=re.sub(r"\s+","",old_definitions[0])
+    if observed!="#defineMAX(a,b)((a>b)?a:b)":
+        abort("Goodix MAX semantics/layout unexpected: "+observed)
+    common=(src/"aosp/include/linux/minmax.h").read_text()
+    if not re.search(
+        r"(?m)^[ \t]*#[ \t]*define[ \t]+MAX[ \t]*\([ \t]*a[ \t]*,[ \t]*b[ \t]*\)",
+        common
+    ):
+        abort("new GKI MAX definition absent; cannot verify conflict")
+    if "GOODIX_INSPECT_LOCAL_MAX" in before:
+        abort("Goodix macro already renamed; avoid double patch")
+    occurrences=len(re.findall(r"\bMAX(?=[ \t]*\()",before))
+    if occurrences<1:
+        abort("Goodix local MAX macro unexpectedly unused")
+    after,count=re.subn(
+        r"\bMAX(?=[ \t]*\()","GOODIX_INSPECT_LOCAL_MAX",before
+    )
+    new_definitions=re.findall(
+        r"(?m)^[ \t]*#[ \t]*define[ \t]+GOODIX_INSPECT_LOCAL_MAX(?=[ \t(])",
+        after
+    )
+    if count!=occurrences or len(new_definitions)!=1:
+        abort("Goodix macro rewrite failed exact token-count audit")
+    if re.search(r"\bMAX(?=[ \t]*\()",after):
+        abort("old Goodix MAX macro remained after narrow rename")
+    old_sha=sha(source)
+    source.write_text(after)
+    diff=subprocess.run(
+        ["git","-C",str(module_dir),"diff","--","goodix_ts_inspect.c"],
+        text=True,capture_output=True,check=True
+    )
+    minus=re.search(
+        r"(?m)^-[ \t]*#[ \t]*define[ \t]+MAX(?=[ \t(])",
+        diff.stdout
+    )
+    plus=re.search(
+        r"(?m)^\+[ \t]*#[ \t]*define[ \t]+GOODIX_INSPECT_LOCAL_MAX(?=[ \t(])",
+        diff.stdout
+    )
+    if not (minus and plus):
+        abort("Goodix source Git diff lacks exactly expected macro change")
+    (out/"U28_GOODIX_TOUCH_MAX_SOURCE_DIFF.txt").write_text(diff.stdout)
+    result={
+        "status":"U28_GOODIX_TOUCH_LOCAL_MAX_GUARDED_RENAME_CI_ONLY",
+        "source_path":"private/google-modules/touch/goodix/goodix_ts_inspect.c",
+        "old_sha256":old_sha,
+        "patched_sha256":sha(source),
+        "macro_definitions_changed":1,
+        "macro_declaration_and_local_uses_renamed":count,
+        "touchscreen_module_disabled":False,
+        "internal_GPU_WiFi_USB_watchdog_UWB_modules_disabled":False,
+        "compiler_warning_suppressed":False,
+        "gki_header_modified":False,
+        "touchscreen_real_hardware_behavior_verified":False,
+        "real_device_flash_gate":"DENY"
+    }
+    (out/"U28_GOODIX_TOUCH_MAX_PATCH.json").write_text(
+        json.dumps(result,indent=2)+"\n"
+    )
+    print(json.dumps(result,indent=2))
+
+
 def scan_version(image):
     if not image.is_file():return None
     before=b""
@@ -370,6 +448,7 @@ def audit(src, out, rc):
         "DWC3_macro_collision_reappeared":("'DWC3_LLUCTL' macro redefined" in t),
         "BMS_legacy_MAX_macro_collision_reappeared":("'MAX' macro redefined" in t),
         "some_local_MIN_macro_collision_reappeared":("'MIN' macro redefined" in t),
+        "Goodix_TOUCH_MAX_macro_collision_reappeared":("goodix_ts_inspect.c" in t and "MAX" in t and "macro redefined" in t),
         "Mali_GPU_minmax_macro_collision_reappeared":("mali_malisw.h" in t and "macro redefined" in t),
         "bcm4398_regon_coordinator_MIN_collision_reappeared":("'MIN' macro redefined" in t and "wb_regon_coordinator.c" in t),
         "UWB_fwupdater_MIN_macro_collision_reappeared":("\'MIN\' macro redefined" in t),
@@ -432,5 +511,6 @@ def main():
         patch_bcm4398_wifi_local_min(a.src,a.out)
         inventory_other_legacy_minmax(a.src,a.out)
         patch_mali_gpu_minmax_compat(a.src,a.out)
+        patch_goodix_touch_local_max(a.src,a.out)
     else:audit(a.src,a.out,a.exit_code)
 if __name__=="__main__":main()
