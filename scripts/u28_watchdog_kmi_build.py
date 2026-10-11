@@ -335,81 +335,116 @@ def patch_mali_gpu_minmax_compat(src, out):
 
 
 def patch_goodix_touch_local_max(src, out):
-    """Keep the real Goodix touch module. Rename only its legacy local MAX.
+    """Review all Goodix local MIN/MAX definitions; patch only two proven MAX's.
 
-    The observed old source and upstream kernel definition are both checked.
-    This is a source-only CI experiment; neither driver behavior nor on-device
-    touch compatibility is proven by a successful compiler exit.
+    Both Goodix inspection and proc had the *same* compiler failure at
+    source line 123 / 102 respectively in U28 runs 8 and 9. Retain all touch
+    functionality and error checking; do not blanket replace macros.
     """
     module_dir=src/"private/google-modules/touch/goodix"
-    source=module_dir/"goodix_ts_inspect.c"
-    if not source.is_file():
-        abort("Goodix touchscreen inspection source missing")
-    before=source.read_text()
-    old_definitions=re.findall(
-        r"(?m)^[ \t]*#[ \t]*define[ \t]+MAX[ \t]*\([^\r\n]*$",before)
-    if len(old_definitions)!=1:
-        abort("unexpected count of Goodix legacy MAX definitions")
-    observed=re.sub(r"\s+","",old_definitions[0])
-    if observed!="#defineMAX(a,b)((a>b)?a:b)":
-        abort("Goodix MAX semantics/layout unexpected: "+observed)
+    if not module_dir.is_dir():
+        abort("Goodix touch module source missing")
     common=(src/"aosp/include/linux/minmax.h").read_text()
     if not re.search(
         r"(?m)^[ \t]*#[ \t]*define[ \t]+MAX[ \t]*\([ \t]*a[ \t]*,[ \t]*b[ \t]*\)",
         common
     ):
         abort("new GKI MAX definition absent; cannot verify conflict")
-    if "GOODIX_INSPECT_LOCAL_MAX" in before:
-        abort("Goodix macro already renamed; avoid double patch")
-    occurrences=len(re.findall(r"\bMAX(?=[ \t]*\()",before))
-    if occurrences<1:
-        abort("Goodix local MAX macro unexpectedly unused")
-    after,count=re.subn(
-        r"\bMAX(?=[ \t]*\()","GOODIX_INSPECT_LOCAL_MAX",before
+
+    # Early inventory means an unexpected third conflict fails BEFORE another
+    # expensive real kernel build instead of hiding the collision.
+    macro_re=re.compile(r"(?m)^[ \t]*#[ \t]*define[ \t]+(MIN|MAX)[ \t]*\([^\r\n]*$")
+    candidates={}
+    for file in sorted(module_dir.rglob("*")):
+        if file.is_file() and file.suffix in (".c",".h"):
+            body=file.read_text(errors="replace")
+            found=[{"macro":m.group(1),"definition":m.group(0).strip()}
+                   for m in macro_re.finditer(body)]
+            if found:
+                candidates[str(file.relative_to(module_dir))]=found
+
+    (out/"U28_GOODIX_ALL_LOCAL_MINMAX_DEFS.json").write_text(
+        json.dumps({"definitions_before_patch":candidates,
+                    "globally_rewritten":False,
+                    "real_device_flash_gate":"DENY"},indent=2)+"\n"
     )
-    new_definitions=re.findall(
-        r"(?m)^[ \t]*#[ \t]*define[ \t]+GOODIX_INSPECT_LOCAL_MAX(?=[ \t(])",
-        after
-    )
-    if count!=occurrences or len(new_definitions)!=1:
-        abort("Goodix macro rewrite failed exact token-count audit")
-    if re.search(r"\bMAX(?=[ \t]*\()",after):
-        abort("old Goodix MAX macro remained after narrow rename")
-    old_sha=sha(source)
-    source.write_text(after)
-    diff=subprocess.run(
-        ["git","-C",str(module_dir),"diff","--","goodix_ts_inspect.c"],
+    target_names=("goodix_ts_inspect.c","goodix_ts_proc.c")
+    if set(candidates)!=set(target_names):
+        abort("unexpected Goodix MIN/MAX definition files: "+repr(candidates))
+    expected="#defineMAX(a,b)((a>b)?a:b)"
+    for name in target_names:
+        definitions=candidates[name]
+        if len(definitions)!=1 or definitions[0]["macro"]!="MAX":
+            abort("unexpected Goodix MIN/MAX definition count: "+name)
+        if re.sub(r"\s+","",definitions[0]["definition"])!=expected:
+            abort("unexpected Goodix MAX semantics in "+name)
+
+    changes=[]
+    for name in target_names:
+        source=module_dir/name
+        before=source.read_text()
+        local_name={
+            "goodix_ts_inspect.c":"GOODIX_INSPECT_LOCAL_MAX",
+            "goodix_ts_proc.c":"GOODIX_PROC_LOCAL_MAX",
+        }[name]
+        if local_name in before:
+            abort("Goodix local macro already renamed: "+name)
+        count_before=len(re.findall(r"\bMAX(?=[ \t]*\()",before))
+        if count_before<1:
+            abort("Goodix MAX definition absent from "+name)
+        after,count=re.subn(r"\bMAX(?=[ \t]*\()",local_name,before)
+        new_defs=re.findall(
+            r"(?m)^[ \t]*#[ \t]*define[ \t]+"+local_name+r"(?=[ \t(])",
+            after
+        )
+        if count!=count_before or len(new_defs)!=1:
+            abort("Goodix macro rewrite failed exact token-count check: "+name)
+        if re.search(r"\bMAX(?=[ \t]*\()",after):
+            abort("Goodix old MAX still found: "+name)
+        previous=sha(source)
+        source.write_text(after)
+        diff=subprocess.run(["git","-C",str(module_dir),"diff","--",name],
+                            text=True,capture_output=True,check=True)
+        old_decl=re.search(
+            r"(?m)^-[ \t]*#[ \t]*define[ \t]+MAX(?=[ \t(])",diff.stdout
+        )
+        new_decl=re.search(
+            r"(?m)^\+[ \t]*#[ \t]*define[ \t]+"+local_name+r"(?=[ \t(])",
+            diff.stdout
+        )
+        if not (old_decl and new_decl):
+            abort("Goodix source diff failed review: "+name)
+        (out/("U28_GOODIX_"+name+"_DIFF.txt")).write_text(diff.stdout)
+        changes.append({
+            "path":"private/google-modules/touch/goodix/"+name,
+            "original_SHA256":previous,
+            "patched_SHA256":sha(source),
+            "legacy_macro": "MAX",
+            "local_name":local_name,
+            "definition_and_uses_renamed":count,
+        })
+    combined=subprocess.run(
+        ["git","-C",str(module_dir),"diff","--",
+         "goodix_ts_inspect.c","goodix_ts_proc.c"],
         text=True,capture_output=True,check=True
     )
-    minus=re.search(
-        r"(?m)^-[ \t]*#[ \t]*define[ \t]+MAX(?=[ \t(])",
-        diff.stdout
-    )
-    plus=re.search(
-        r"(?m)^\+[ \t]*#[ \t]*define[ \t]+GOODIX_INSPECT_LOCAL_MAX(?=[ \t(])",
-        diff.stdout
-    )
-    if not (minus and plus):
-        abort("Goodix source Git diff lacks exactly expected macro change")
-    (out/"U28_GOODIX_TOUCH_MAX_SOURCE_DIFF.txt").write_text(diff.stdout)
-    result={
-        "status":"U28_GOODIX_TOUCH_LOCAL_MAX_GUARDED_RENAME_CI_ONLY",
-        "source_path":"private/google-modules/touch/goodix/goodix_ts_inspect.c",
-        "old_sha256":old_sha,
-        "patched_sha256":sha(source),
-        "macro_definitions_changed":1,
-        "macro_declaration_and_local_uses_renamed":count,
+    (out/"U28_GOODIX_TOUCH_MAX_SOURCE_DIFF.txt").write_text(combined.stdout)
+    report={
+        "status":"U28_GOODIX_INSPECT_AND_PROC_LOCAL_MAX_RENAME_IN_CI_ONLY",
+        "source_files_changed":changes,
+        "all_local_goodix_min_max_definitions_audited":True,
         "touchscreen_module_disabled":False,
-        "internal_GPU_WiFi_USB_watchdog_UWB_modules_disabled":False,
+        "GPU_WiFi_USB_watchdog_UWB_battery_modules_disabled":False,
         "compiler_warning_suppressed":False,
         "gki_header_modified":False,
-        "touchscreen_real_hardware_behavior_verified":False,
-        "real_device_flash_gate":"DENY"
+        "physical_touch_functionality_verified":False,
+        "KMI_6_1_124_vs_6_1_157_resolved":False,
+        "real_device_flash_gate":"DENY",
     }
     (out/"U28_GOODIX_TOUCH_MAX_PATCH.json").write_text(
-        json.dumps(result,indent=2)+"\n"
+        json.dumps(report,indent=2)+"\n"
     )
-    print(json.dumps(result,indent=2))
+    print(json.dumps(report,indent=2))
 
 
 def scan_version(image):
