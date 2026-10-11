@@ -1,0 +1,67 @@
+name: U19 shiba CP2A vendor module/GKI binary compatibility audit (NO FLASH)
+
+on:
+  pull_request:
+    paths:
+      - PHASE_U19.md
+      - scripts/u19_vendor_abi_audit.py
+      - .github/workflows/phase-u19-vendor-abi.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u19-shiba-abi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  binary-abi-audit:
+    name: Inspect real U17 vendor .ko metadata against U18 GKI (no phone)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch hash-audited U17 shusky build artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38099633940
+          name: u17-SHUSKY-SOURCE-ONLY-DO-NOT-FLASH-4
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u17
+
+      - name: Fetch pinned 6.1.157 GKI U18 build artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38101661379
+          name: u18-CP2A-GKI-RESEARCH-NOT-FLASHABLE-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u18
+
+      - name: Verify actual binary hashes and raw vermagic, deny mismatched integration
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/u19_vendor_abi_audit.py
+          mkdir -p output/u19
+          python3 scripts/u19_vendor_abi_audit.py \
+            --u17 input/u17 \
+            --u18 input/u18 \
+            --out output/u19
+          python3 -m json.tool output/u19/U19_VENDOR_ABI_REPORT.json >/dev/null
+          grep -Fq 'INTEGRATION BLOCKED' output/u19/U19_VENDOR_ABI_REPORT.md
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u19/U19_VENDOR_ABI_REPORT.md
+          cat output/u19/U19_VENDOR_ABI_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve evidence, NOT module/boot binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u19-shiba-vendor-KMI-AUDIT-NOT-BOOTABLE-${{ github.run_number }}
+          path: output/u19/
+          retention-days: 28
+          if-no-files-found: warn
