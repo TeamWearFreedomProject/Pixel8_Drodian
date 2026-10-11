@@ -112,7 +112,11 @@ jobs:
         run: |
           set -euxo pipefail
           cd gki-src
-          git -C common fetch --depth=1 origin "refs/tags/$GKI_TAG"
+          # repo sync can create a checkout without an "origin" remote.
+          # Fetch the exact official tag from an explicit Google URL instead.
+          git -C common fetch --depth=1 \
+            https://android.googlesource.com/kernel/common \
+            "refs/tags/$GKI_TAG"
           git -C common checkout --detach "$GKI_COMMIT"
           actual="$(git -C common rev-parse HEAD)"
           test "$actual" = "$GKI_COMMIT"
