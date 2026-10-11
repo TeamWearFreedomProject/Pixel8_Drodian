@@ -1,0 +1,274 @@
+name: U31 OFFLINE GKI 6.1.157 vendor ABI and DTBO forensic audit (NO FLASH)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u31-offline-abi-audit.yml
+      - scripts/u31_offline_abi_audit.py
+      - PHASE_U31.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u31-offline-abi-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SHUSKY_BRANCH: android-gs-shusky-6.1-android16
+  GKI_TAG: android14-6.1-2025-12_r9
+  GKI_SHA40: bd23337e42e794964a89f47596daf1209a25ee1a
+
+jobs:
+  source-gki-then-guarded-shusky:
+    name: Research-only 6.1.157 source-vendor ABI symbol and board evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 145
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read immutable U30 successful 6.1.157 full dist audit (no binary)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38144121200
+          name: u30-STAGED-SOURCE-GKI-SHUSKY-NOT-FLASHABLE-6
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/u30
+
+      - name: Prepare isolated runner and source-only evidence directory
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/bin" output/u30-build output/u31
+          python3 -m py_compile \
+            scripts/u30_source_alias_experiment.py \
+            scripts/u30_staged_build_gate.py \
+            scripts/u30_fix_rtl8150_defconfig.py \
+            scripts/u31_offline_abi_audit.py \
+            scripts/u28_watchdog_kmi_build.py \
+            scripts/u25_source_only_shusky.py
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/.ghcup || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl dwarves file flex \
+            git kmod binutils libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils zip zstd
+          curl -fsSL --retry 4 \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+          "$HOME/bin/repo" version
+          git config --global user.name "U30 isolated build research"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get prior independently successful U27 watchdog source provenance
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38113084815
+          name: u27-GKI-KMI-WATCHDOG-SOURCE-AUDIT-NOT-FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/u27
+
+      - name: Sync Google official shusky tree and pin exact 6.1.157 GKI source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p shusky-src
+          cd shusky-src
+          "$HOME/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "$SHUSKY_BRANCH"
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/u30-build/U30_SOURCE_SYNC_FULL.log"
+          git -C aosp fetch --depth=1 \
+            https://android.googlesource.com/kernel/common "refs/tags/$GKI_TAG"
+          git -C aosp checkout --detach "$GKI_SHA40"
+          test "$(git -C aosp rev-parse HEAD)" = "$GKI_SHA40"
+          "$HOME/bin/repo" manifest -r \
+            -o "$GITHUB_WORKSPACE/output/u30-build/U30_GOOGLE_SOURCES.xml"
+          df -h /
+
+      - name: Apply previously reviewed vendor source adaptations and U30 source GKI alias
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s evidence/u27/U27_KMI_WATCHDOG_DIAGNOSIS.json
+          grep -Fq 'build --use_prebuilt_gki=true' \
+            shusky-src/private/devices/google/common/device.bazelrc
+          python3 scripts/u25_source_only_shusky.py patch \
+            --source-dir shusky-src --out output/u30-build
+          # U25's approved optional RTL8150 exclusion removes the Kconfig
+          # symbol; reconcile EXACTLY its stale gki_defconfig request before
+          # a native source-kernel build runs the strict savedefconfig gate.
+          python3 scripts/u30_fix_rtl8150_defconfig.py \
+            --src shusky-src --out output/u30-build
+          test -s output/u30-build/U30_OPTIONAL_RTL8150_CONFIG_DIFF.txt
+          test -s output/u30-build/U30_OPTIONAL_RTL8150_GKI_MODULE_OUTS_DIFF.txt
+          python3 scripts/u28_watchdog_kmi_build.py patch \
+            --src shusky-src --u27 evidence/u27/U27_KMI_WATCHDOG_DIAGNOSIS.json \
+            --out output/u30-build
+          python3 scripts/u30_source_alias_experiment.py patch \
+            --src shusky-src --out output/u30-build
+          test -s output/u30-build/U30_RESEARCH_ONLY_COMMON_GKI_ALIAS_DIFF.txt
+          git -C shusky-src/private/devices/google/common diff \
+            > output/u30-build/U30_SOURCE_GKI_COMMON_DIFF.txt
+          test -s output/u30-build/U30_SOURCE_GKI_COMMON_DIFF.txt
+          df -h /
+
+      - name: Confirm U30 shusky kernel reaches source r9 GKI before expensive compilation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd shusky-src
+          set +e
+          ./tools/bazel cquery \
+            --config=stamp --config=shusky --config=use_source_tree_aosp \
+            --use_prebuilt_gki=false --use_signed_prebuilts=false \
+            --download_prebuilt_gki_fips140=false \
+            "somepath(//private/devices/google/shusky:kernel,//aosp:kernel_aarch64)" \
+            --output=label_kind \
+            > "$GITHUB_WORKSPACE/output/u30-build/U30_SOURCE_ALIAS_PATH_QUERY.txt" 2>&1
+          rc=$?
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u30-build/U30_SOURCE_ALIAS_PATH_EXIT.txt"
+          tail -n 25 "$GITHUB_WORKSPACE/output/u30-build/U30_SOURCE_ALIAS_PATH_QUERY.txt"
+          test "$rc" -eq 0
+          cd "$GITHUB_WORKSPACE"
+          python3 scripts/u30_source_alias_experiment.py verify \
+            --out output/u30-build
+
+      - name: STAGE 1 compile actual 6.1.157 GKI kernel source target (no phone)
+        id: source
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          set +e
+          ./tools/bazel build --jobs=2 \
+            --config=stamp --config=shusky --config=use_source_tree_aosp \
+            --use_prebuilt_gki=false --use_signed_prebuilts=false \
+            --download_prebuilt_gki_fips140=false \
+            //aosp:kernel_aarch64 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u30-build/U30_KERNEL_SOURCE_BUILD_FULL.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u30-build/U30_KERNEL_SOURCE_EXIT.txt"
+          echo "U30 direct GKI source build exit code: $rc"
+          exit "$rc"
+
+      - name: STAGE 1 gate actual source Image release and SHA256 before full vendor build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u30_staged_build_gate.py source \
+            --src shusky-src --out output/u30-build \
+            --rc-file output/u30-build/U30_KERNEL_SOURCE_EXIT.txt
+          test -s output/u30-build/U30_SOURCE_KERNEL_PASS.txt
+          cat output/u30-build/U30_SOURCE_KERNEL_AUDIT.json >> "$GITHUB_STEP_SUMMARY"
+          df -h /
+
+      - name: STAGE 2 inspect full shusky dist graph for stale downloaded GKI
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          cfg=(
+            --config=stamp --config=shusky --config=use_source_tree_aosp
+            --use_prebuilt_gki=false --use_signed_prebuilts=false
+            --download_prebuilt_gki_fips140=false
+          )
+          set +e
+          ./tools/bazel cquery "${cfg[@]}" \
+            "somepath(//private/devices/google/shusky:zuma_shusky_dist,//aosp:kernel_aarch64)" \
+            --output=label_kind \
+            > "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_SOURCE_PATH_CQUERY.txt" 2>&1
+          rc1=$?
+          ./tools/bazel cquery "${cfg[@]}" \
+            "somepath(//private/devices/google/shusky:zuma_shusky_dist,//aosp:kernel_aarch64_download_or_build)" \
+            --output=label_kind \
+            > "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_OLD_PATH_CQUERY.txt" 2>&1
+          rc2=$?
+          set -e
+          echo "$rc1" > "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_SOURCE_PATH_EXIT.txt"
+          echo "$rc2" > "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_OLD_PATH_EXIT.txt"
+          tail -n 20 "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_SOURCE_PATH_CQUERY.txt"
+          tail -n 20 "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_OLD_PATH_CQUERY.txt"
+          cd "$GITHUB_WORKSPACE"
+          python3 scripts/u30_staged_build_gate.py graph --out output/u30-build
+
+      - name: STAGE 3 shusky vendor full build ONLY after actual source and graph gates
+        id: vendor
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          set +e
+          ./tools/bazel run --jobs=2 \
+            --config=stamp --config=shusky --config=use_source_tree_aosp \
+            --use_prebuilt_gki=false --use_signed_prebuilts=false \
+            --download_prebuilt_gki_fips140=false \
+            //private/devices/google/shusky:zuma_shusky_dist 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u30-build/U30_VENDOR_FULL_BUILD_FULL.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u30-build/U30_VENDOR_BUILD_EXIT.txt"
+          echo "U30 shusky vendor full build exit: $rc"
+          exit "$rc"
+
+      - name: STAGE 3 gate actual compiled full Image release (not flashable)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u30_staged_build_gate.py full \
+            --src shusky-src --out output/u30-build \
+            --rc-file output/u30-build/U30_VENDOR_BUILD_EXIT.txt
+          cat output/u30-build/U30_FULL_DIST_AUDIT.json >> "$GITHUB_STEP_SUMMARY"
+          echo "IMPORTANT: Compile is NOT phone ABI/rollback safety verification" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: U31 offline audit GKI Module.symvers vs emitted modules and DTBO inventory
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s evidence/u30/U30_FULL_DIST_AUDIT.json
+          test -s output/u30-build/U30_SOURCE_KERNEL_PASS.txt
+          test -s output/u30-build/U30_PROVIDER_PASS.txt
+          test "$(cat output/u30-build/U30_VENDOR_BUILD_EXIT.txt)" = 0
+          python3 scripts/u31_offline_abi_audit.py \
+            --src shusky-src --out output/u31 \
+            --u30 evidence/u30/U30_FULL_DIST_AUDIT.json
+          test -s output/u31/U31_OFFLINE_ABI_BOARD_AUDIT.json
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' \
+            output/u31/U31_OFFLINE_ABI_BOARD_AUDIT.md
+          cat output/u31/U31_OFFLINE_ABI_BOARD_AUDIT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve research diagnostic evidence only and discard build binaries
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          for name in U30_SOURCE_SYNC_FULL U30_KERNEL_SOURCE_BUILD_FULL U30_VENDOR_FULL_BUILD_FULL; do
+            file="output/u30-build/$name.log"
+            if [[ -f "$file" ]]; then
+              tail -n 600 "$file" > "output/u30-build/$name-TAIL.log"
+              rm -f "$file"
+            fi
+          done
+          df -h / || true
+          printf '%s\n' \
+            "U31 source and vendor forensic build only. Real CP2A ABI, shiba board, AVB, and rescue unverified. NEVER FLASH." \
+            > output/u30-build/REAL_DEVICE_FLASH_GATE_DENY.txt
+
+      - name: Upload only source checks, Bazel failures, hashes and exit codes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u31-GKI-SHIBA-OFFLINE-ABI-BOARD-REPORT-NOT-FLASHABLE-${{ github.run_number }}
+          path: |
+            output/u30-build/
+            output/u31/
+          retention-days: 21
+          if-no-files-found: warn
