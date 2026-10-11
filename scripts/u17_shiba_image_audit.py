@@ -8,7 +8,44 @@ matching installed vendor ABI, boot security, or native Ubuntu compatibility.
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
+
+# Measured on the user's booting stock Pixel 8 / shiba via ADB (2026-10-11).
+CP2A_BUILD = "CP2A.260805.005"
+CP2A_KERNEL_RELEASE = "6.1.157-android14-11-gbd23337e42e7-ab14791245"
+KERNEL_BANNER = re.compile(rb"Linux version (\d+\.\d+\.\d+-[^\s\x00]+)")
+
+
+def detect_kernel_release(path: Path):
+    """Read-only scan of a raw Linux Image. Missing data must remain unknown."""
+    if not path.is_file():
+        return None
+    with path.open("rb") as source:
+        tail = b""
+        while True:
+            block = source.read(1024 * 1024)
+            if not block:
+                break
+            window = tail + block
+            found = KERNEL_BANNER.search(window)
+            if found:
+                return found.group(1).decode("ascii", errors="replace")
+            tail = window[-256:]
+    return None
+
+
+def kernel_patch_relation(candidate, reference):
+    """Informational version comparison, NOT an Android rollback-index test."""
+    if not candidate:
+        return "unknown"
+    m1 = re.match(r"^(\d+)\.(\d+)\.(\d+)-", candidate)
+    m2 = re.match(r"^(\d+)\.(\d+)\.(\d+)-", reference)
+    if not m1 or not m2:
+        return "unknown"
+    a = tuple(int(x) for x in m1.groups())
+    b = tuple(int(x) for x in m2.groups())
+    return "older" if a < b else "newer" if a > b else "same-numeric-version"
 
 IMAGE_NAMES = (
     "boot.img",
@@ -60,6 +97,21 @@ def main():
     report = {
         "status": "BUILD_ONLY_NO_DEVICE_PROVENANCE",
         "source_family": "google/shusky",
+        "actual_device_baseline": {
+            "codename": "shiba",
+            "stock_factory_build": CP2A_BUILD,
+            "stock_kernel_release_from_adb": CP2A_KERNEL_RELEASE,
+            "normal_stock_android_boot_confirmed": True,
+        },
+        "avb_rollback_indexes_verified": False,
+        "bootloader_rollback_version_verified": False,
+        "active_and_inactive_slots_verified": False,
+        "real_device_flash_gate": "DENY",
+        "flash_gate_reasons": [
+            "Build output has not been verified against stock CP2A modules and shiba DTBO",
+            "Bootloader anti-rollback and AVB rollback indices are not verified",
+            "Native Ubuntu rootfs boot, display and USB behavior are not verified",
+        ],
         "target_requested": "Pixel 8 shiba (NOT husky)",
         "source_manifest_provided": args.manifest.is_file() and args.manifest.stat().st_size > 0,
         "actual_shiba_dtbo_selection_verified": False,
@@ -90,6 +142,17 @@ def main():
                 shutil.copyfile(source, outimages / name)
                 data["included_in_ci_artifact"] = True
             report["images"][name] = data
+    release = detect_kernel_release(args.dist / "Image")
+    exact = release == CP2A_KERNEL_RELEASE if release else False
+    report["built_kernel_release"] = release
+    report["built_kernel_matches_stock_cp2a_exactly"] = exact
+    report["built_kernel_patch_relation_to_stock"] = kernel_patch_relation(
+        release, CP2A_KERNEL_RELEASE
+    )
+    if not exact:
+        report["flash_gate_reasons"].insert(
+            0, "Kernel release does not exactly match stock CP2A (or is unknown)"
+        )
     ready = args.dist.is_dir() and args.manifest.is_file()
     present = [name for name, item in report["images"].items() if item.get("present")]
     report["status"] = "GOOGLE_SHUSKY_SOURCE_BUILD_FILES_PRESENT" if ready and present else "BUILD_FAILED_OR_NO_IMAGES"
@@ -104,6 +167,19 @@ def main():
         "Actual *shiba* panel DTBO selection, installed vendor module ABI, AVB and rootfs",
         "integration have **not** been validated.",
         "",
+        "## Current real-device baseline (read-only ADB verification)",
+        "",
+        f"- Google Pixel 8 **shiba** stock: \`{CP2A_BUILD}\`",
+        f"- Stock kernel: \`{CP2A_KERNEL_RELEASE}\`",
+        f"- U17 built kernel: \`{release or 'UNKNOWN'}\`",
+        f"- Kernel release exactly matches stock: **{exact}**",
+        f"- Numeric kernel patch relation to stock: **{report['built_kernel_patch_relation_to_stock']}**",
+        "- **REAL-DEVICE FLASH GATE: DENY (research output, not CP2A-compatible firmware).**",
+        "- Android rollback protection is determined by bootloader/AVB rollback metadata;",
+        "  kernel patch version comparisons alone **cannot** prove rollback safety.",
+        "- No flashing, bootloader replacement, AVB bypass, or A/B slot switching.",
+        ""
+        "",
         "| Filename | Present | Bytes | Format hint | SHA256 |",
         "| --- | --- | ---: | --- | --- |",
     ]
@@ -116,7 +192,7 @@ def main():
         "", "## Not produced / not validated",
         "", ", ".join(NOT_GENERATED), "",
         "- Native Ubuntu on real Pixel 8: **NOT VERIFIED**",
-        "- Compatibility with Evolution X Android 16 or the currently modified device: **UNKNOWN**",
+        "- Compatibility with stock shiba CP2A.260805.005: **UNVERIFIED**",
         "- Do not mix with husky / Pixel 8 Pro boot files.",
         "- No phone connected; no ADB, fastboot, device write, userdata erase or slot change.",
         "",
