@@ -1,0 +1,151 @@
+name: U22 shusky Pixel 8 kernel drivers on GKI 6.1.157 build experiment (NO FLASH)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u22-shusky-gki-bridge.yml
+      - scripts/u22_shusky_gki_attempt.py
+      - PHASE_U22.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: u22-shusky-gki-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SHUSKY_BRANCH: android-gs-shusky-6.1-android16
+  GKI_TAG: android14-6.1-2025-12_r9
+  GKI_SHA40: bd23337e42e794964a89f47596daf1209a25ee1a
+
+jobs:
+  gki-shusky-prototype:
+    name: Attempt real Google shusky driver build with pinned GKI 6.1.157
+    runs-on: ubuntu-24.04
+    timeout-minutes: 165
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize disposable runner and official repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p output/u22 "$HOME/bin"
+          python3 -m py_compile scripts/u22_shusky_gki_attempt.py
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/.ghcup || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl dwarves file flex \
+            git libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils zip zstd
+          curl -fsSL --retry 4 https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+          "$HOME/bin/repo" version
+          git config --global user.name "U22 Google kernel study"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync upstream shusky sources and vendor driver build toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p shusky-src
+          cd shusky-src
+          "$HOME/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "$SHUSKY_BRANCH"
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/u22/U22_SYNC.log"
+          test -f ./build_shusky.sh
+          test -f aosp/Makefile
+          test -d private/devices/google/shusky
+          df -h /
+
+      - name: Pin kernel/common to the exact CP2A upstream GKI Git commit
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd shusky-src
+          git -C aosp fetch --depth=1 \
+            https://android.googlesource.com/kernel/common "refs/tags/$GKI_TAG"
+          git -C aosp checkout --detach "$GKI_SHA40"
+          actual="$(git -C aosp rev-parse HEAD)"
+          test "$actual" = "$GKI_SHA40"
+          echo "$actual" > "$GITHUB_WORKSPACE/output/u22/U22_COMMON_PINNED_SHA.txt"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          data=Path("aosp/Makefile").read_text()
+          got={}
+          for key in ("VERSION","PATCHLEVEL","SUBLEVEL"):
+              m=re.search(r"^"+key+r"\s*=\s*(\d+)$",data,re.M)
+              if m is None: raise SystemExit("Missing Makefile version: "+key)
+              got[key]=int(m.group(1))
+          assert (got["VERSION"],got["PATCHLEVEL"],got["SUBLEVEL"]) == (6,1,157), got
+          PY
+          "$HOME/bin/repo" manifest -r \
+            -o "$GITHUB_WORKSPACE/output/u22/U22_SHUSKY_GKI_RESOLVED.xml"
+          df -h /
+
+      - name: Compile shusky vendor modules against pinned GKI (failed compilation is NOT concealed)
+        id: compile
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          set +e
+          bash ./build_shusky.sh 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u22/U22_SHUSKY_BUILD_FULL.log"
+          rc="${PIPESTATUS[0]}"
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u22/U22_BUILD_EXIT.txt"
+          if [[ -d out/shusky/dist ]]; then
+            find out/shusky/dist -maxdepth 1 -type f \
+              -printf '%f %s bytes\n' | sort \
+              > "$GITHUB_WORKSPACE/output/u22/U22_DIST_INVENTORY.txt"
+          fi
+          echo "Build script exit code: $rc"
+          exit "$rc"
+
+      - name: Audit exact kernel release, vendor sources, modules and build outcome
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s output/u22/U22_COMMON_PINNED_SHA.txt
+          test -s output/u22/U22_SHUSKY_GKI_RESOLVED.xml
+          test -s output/u22/U22_SHUSKY_BUILD_FULL.log
+          rc="$(cat output/u22/U22_BUILD_EXIT.txt)"
+          python3 scripts/u22_shusky_gki_attempt.py \
+            --source-dir shusky-src \
+            --manifest output/u22/U22_SHUSKY_GKI_RESOLVED.xml \
+            --log output/u22/U22_SHUSKY_BUILD_FULL.log \
+            --build-exit "$rc" \
+            --checkout-commit output/u22/U22_COMMON_PINNED_SHA.txt \
+            --out output/u22
+          cat output/u22/U22_SHUSKY_6_1_157_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture bounded error evidence (no full kernel binaries in artifact)
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -f output/u22/U22_SHUSKY_BUILD_FULL.log ]]; then
+            tail -n 600 output/u22/U22_SHUSKY_BUILD_FULL.log \
+              > output/u22/U22_BUILD_TAIL.log
+          fi
+          if [[ -f output/u22/U22_SYNC.log ]]; then
+            tail -n 200 output/u22/U22_SYNC.log \
+              > output/u22/U22_SYNC_TAIL.log
+          fi
+          rm -f output/u22/U22_SHUSKY_BUILD_FULL.log output/u22/U22_SYNC.log
+
+      - name: Preserve source manifest, research report, failure logs only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u22-shusky-6.1.157-AUDIT-NOT-FLASHABLE-${{ github.run_number }}
+          path: output/u22/
+          retention-days: 21
+          if-no-files-found: warn
