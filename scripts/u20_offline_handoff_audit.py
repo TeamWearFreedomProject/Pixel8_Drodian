@@ -60,21 +60,43 @@ def read_ext4(image):
             "systemd_labwc_phoc_files_present": True}
 
 
-def read_initramfs(ramdisk, expected_init):
+def read_initramfs(ramdisk, expected_init, require_static_probe=False):
     decompressed = tool("lz4", "-dc", str(ramdisk))
     entries = tool("cpio", "-it", "--quiet", input_bytes=decompressed).decode(
         "utf-8", "replace"
     ).splitlines()
     names = set(x.removeprefix("./") for x in entries)
-    if not {"init", "bin/busybox"}.issubset(names):
-        raise RuntimeError("U8 initramfs missing init or static ARM64 BusyBox")
-    # Extract the executable init script only, never privileged filesystem paths.
-    init_bytes = tool("cpio", "-i", "--to-stdout", "init", input_bytes=decompressed)
-    if not init_bytes:
-        init_bytes = tool("cpio", "-i", "--to-stdout", "./init",
-                          input_bytes=decompressed)
+    required = {"init", "bin/busybox"}
+    if require_static_probe:
+        required.add("bin/u8-rootfs-probe")
+    if not required.issubset(names):
+        raise RuntimeError("First-stage initramfs missing: " + str(required-names))
+    # The U8 archive was made before /init was revised to require the static
+    # filesystem UUID helper. U20 MUST repack from the current reviewed source
+    # and validate THAT new initramfs, not silently pass the obsolete archive.
+    init_bytes = b""
+    for name in ("init", "./init"):
+        p = subprocess.run(["cpio", "-i", "--to-stdout", name],
+                           input=decompressed, capture_output=True)
+        if p.returncode not in (0, 1):
+            raise RuntimeError("cpio init extraction failed: " + p.stderr.decode(
+                "utf-8", "replace"))
+        if p.stdout:
+            init_bytes = p.stdout
+            break
     if init_bytes != expected_init.read_bytes():
-        raise RuntimeError("U8 packed first-stage init differs from audited source")
+        raise RuntimeError("Rebuilt U20 /init does NOT match reviewed current source")
+    if require_static_probe:
+        probe_bytes = b""
+        for name in ("bin/u8-rootfs-probe", "./bin/u8-rootfs-probe"):
+            p = subprocess.run(["cpio", "-i", "--to-stdout", name],
+                               input=decompressed, capture_output=True)
+            if p.stdout:
+                probe_bytes = p.stdout
+                break
+        if not (len(probe_bytes) >= 128 and probe_bytes[:4] == b"\x7fELF" and
+                int.from_bytes(probe_bytes[18:20], "little") == 183):
+            raise RuntimeError("U20 static UUID helper is not an AArch64 ELF binary")
     script = init_bytes.decode("utf-8")
     for marker in ("u8.rootuuid=", "u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED",
                    "mount -t ext4 -o ro,noload", "switch_root /newroot /sbin/init"):
@@ -103,7 +125,7 @@ def gki_release(image):
 
 def main():
     p = argparse.ArgumentParser()
-    for arg in ("rootfs", "ramdisk", "gki", "u19", "u18report", "sourceinit", "out"):
+    for arg in ("rootfs", "ramdisk", "rebuilt", "gki", "u19", "u18report", "sourceinit", "out"):
         p.add_argument("--" + arg, type=Path, required=True)
     a = p.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
@@ -124,7 +146,11 @@ def main():
         raise RuntimeError("U18 verified boot gate missing")
 
     fs = read_ext4(a.rootfs)
-    handoff = read_initramfs(a.ramdisk, a.sourceinit)
+    # The U8 original is retained for provenance, and used as an input to
+    # generate the new reviewed U20 initramfs. Its obsolete /init is NOT used.
+    handoff = read_initramfs(a.rebuilt, a.sourceinit,
+                             require_static_probe=True)
+    rebuilt_sha = sha256(a.rebuilt)
     release = gki_release(a.gki)
     if not release.startswith("6.1.157-android14-11-"):
         raise RuntimeError("U18 research GKI not based on CP2A's 6.1.157 family")
@@ -135,6 +161,9 @@ def main():
         "gki_source_run": 38101661379,
         "u19_abi_audit_run": 38103774760,
         "part_sha256": observed,
+        "new_U20_rebuilt_guarded_initramfs_sha256": rebuilt_sha,
+        "historical_U8_init_stale_replaced_with_reviewed_source": True,
+        "U20_static_AArch64_uuid_probe_included": True,
         "rootfs": fs,
         "handoff": handoff,
         "built_gki_kernel_release": release,
@@ -161,15 +190,18 @@ def main():
         "",
         "| Research part | Verified SHA256 |",
         "| --- | --- |",
-    ] + [f"| {key} | \`{value}\` |" for key, value in observed.items()] + [
+    ] + [f"| {key} | `{value}` |" for key, value in observed.items()] + [
         "",
-        f"- Offline ext4: \`{fs['label']}\`, Ubuntu {fs['ubuntu_release']}, 2 GiB.",
+        f"- Offline ext4: `{fs['label']}`, Ubuntu {fs['ubuntu_release']}, 2 GiB.",
         "- systemd, Labwc and Phoc entries verified in offline ext4 image.",
-        f"- Guarded ARM64 initramfs entries: {handoff['file_entries']} (source init byte-for-byte match).",
+        f"- New U20 guarded ARM64 initramfs entries: {handoff['file_entries']} (current source init byte-for-byte match).",
+        f"- Newly rebuilt U20 ramdisk SHA256: `{rebuilt_sha}`.",
+        "- Historical U8 packed /init was found stale in Run #1 and was REPLACED;",
+        "  this run checks the reviewed current /init plus newly compiled static AArch64 UUID probe.",
         "- Guard requires explicit root UUID and research-gate token; no guessed Android partitions.",
         "- Designed ext4 access is read-only with no journal replay; actual mount and switch_root were **NOT RUN**.",
-        f"- U18 GKI compiled kernel: \`{release}\`.",
-        f"- Phone CP2A stock kernel: \`{STOCK_CP2A}\`.",
+        f"- U18 GKI compiled kernel: `{release}`.",
+        f"- Phone CP2A stock kernel: `{STOCK_CP2A}`.",
         "- U19 vendor modules remain built for older 6.1.124; KMI/symbols/panel not validated.",
         "",
         "## Hard stop",
@@ -181,7 +213,8 @@ def main():
     ]
     (a.out / "U20_OFFLINE_INTEGRATION.md").write_text("\n".join(rows) + "\n")
     (a.out / "U20_RESEARCH_PARTS_SHA256.txt").write_text(
-        "\n".join(f"{observed[k]}  {k}" for k in paths) + "\n"
+        "\n".join(f"{observed[k]}  {k}" for k in paths) +
+        f"\n{rebuilt_sha}  U20_rebuilt_guarded_initramfs\n"
     )
     print("\n".join(rows))
 
