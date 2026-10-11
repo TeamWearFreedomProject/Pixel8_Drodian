@@ -55,8 +55,9 @@ def main():
           "official source-tree override no longer available")
     check('DWC3_LLUCTL' in soc and 'DWC3_LLUCTL' in common,
           "USB DWC3 LLUCTL macro overlap not present in pinned files")
-    dev_defs=re.findall(r"^\s*#define\s+DWC3_LLUCTL(.*)$",soc,re.M)
-    gki_defs=re.findall(r"^\s*#define\s+DWC3_LLUCTL(.*)$",common,re.M)
+    dev_defs=re.findall(r"^[ \t]*#[ \t]*define[ \t]+DWC3_LLUCTL(?=[ \t(])([^\r\n]*)",soc,re.M)
+    gki_defs=re.findall(r"^[ \t]*#[ \t]*define[ \t]+DWC3_LLUCTL(?=[ \t(])([^\r\n]*)",common,re.M)
+    print("Exact DWC3 definitions: vendor=", repr(dev_defs), "GKI=", repr(gki_defs))
     check(len(dev_defs)==1 and len(gki_defs)==1,
           "unexpected DWC3 macro definitions; needs human review")
     check("0xd024" in dev_defs[0].lower() and "0xd024" in gki_defs[0].lower(),
@@ -96,13 +97,13 @@ def main():
     md=[
         "# U24 — pinned CP2A GKI provider and DWC3 macro audit", "",
         "**SOURCE + HISTORIC BUILD LOG VERIFIED. GKI/DRIVER INTEGRATION BLOCKED. DO NOT FLASH.**", "",
-        f"- Device CP2A kernel: \`{SHIBA_STOCK}\`.",
-        f"- Pinned 6.1.157 common source SHA: \`{GKI}\`.",
+        f"- Device CP2A kernel: `{SHIBA_STOCK}`.",
+        f"- Pinned 6.1.157 common source SHA: `{GKI}`.",
         f"- Google Pixel-specific Bazelrc pins default prebuilt **{PREBUILT}** (U17 6.1.124).",
         "- By default the Bazel provider uses old signed GKI prebuilts, even if common source is switched to 6.1.157.",
         "- Official source override is available; U25 must explicitly disable prebuilt and signed prebuilt providers.",
-        f"- Vendor DWC3 old definition: \`#define DWC3_LLUCTL {dev_defs[0].strip()}\`.",
-        f"- New GKI DWC3 definition: \`#define DWC3_LLUCTL{gki_defs[0].strip()}\`.",
+        f"- Vendor DWC3 old definition: `#define DWC3_LLUCTL {dev_defs[0].strip()}`.",
+        f"- New GKI DWC3 definition: `#define DWC3_LLUCTL{gki_defs[0].strip()}`.",
         "- Same register base address but different macro argument API; a source adaptation requires review.",
         "- KMI/sublevel mismatch and macro collision independently confirmed from U22 Run #3.",
         "- Build success, if later achieved, does NOT establish CP2A module CRC/AVB/board compatibility.",
