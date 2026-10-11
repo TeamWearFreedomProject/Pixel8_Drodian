@@ -164,6 +164,91 @@ def patch_uwb_local_min(src, out):
     print("U28 UWB MIN: guarded local macro rename applied, with reviewed diff")
 
 
+def patch_bcm4398_wifi_local_min(src, out):
+    """Keep Pixel 8 Broadcom Wi-Fi enabled; rename ONE obsolete local MIN only.
+
+    Narrow, source-checked revision avoids changing generic GKI minmax, driver
+    logic, any other WLAN files, or weakening strict compiler diagnostics.
+    """
+    wlan=src/"private/google-modules/wlan/bcm4398"
+    file=wlan/"wb_regon_coordinator.c"
+    if not file.is_file():
+        abort("bcm4398 WB regon coordinator file missing")
+    text=file.read_text()
+    definitions=re.findall(
+        r"(?m)^[ \t]*#[ \t]*define[ \t]+MIN[ \t]*\([^ \r\n]*[^\r\n]*$",
+        text)
+    if len(definitions)!=1:
+        abort("expected exactly one local bcm4398 MIN macro definition")
+    old_def=definitions[0]
+    normalized=re.sub(r"\s+","",old_def)
+    expected="#defineMIN(a,b)(((a)<(b))?(a):(b))"
+    if normalized!=expected:
+        abort("Wi-Fi MIN macro does not match actual previous compiler diagnostic: "+normalized)
+    linux_minmax=(src/"aosp/include/linux/minmax.h").read_text()
+    if not re.search(r"(?m)^[ \t]*#[ \t]*define[ \t]+MIN[ \t]*\([ \t]*a[ \t]*,[ \t]*b[ \t]*\)",linux_minmax):
+        abort("upstream GKI MIN macro missing; source revision unknown")
+    oldsha=sha(file)
+    original_count=len(re.findall(r"\bMIN[ \t]*\(",text))
+    if original_count<1:
+        abort("bcm4398 MIN definition/use inventory empty")
+    renamed_name="BCM4398_REGON_LOCAL_MIN"
+    updated,count=re.subn(r"\bMIN(?=[ \t]*\()",renamed_name,text)
+    if count!=original_count or updated.count("#define "+renamed_name)!=1:
+        abort("Wi-Fi MIN definition or usage not changed uniquely")
+    if re.search(r"\bMIN[ \t]*\(",updated):
+        abort("Wi-Fi local MIN collision still present after patch")
+    file.write_text(updated)
+    diff=subprocess.run(
+        ["git","-C",str(wlan),"diff","--","wb_regon_coordinator.c"],
+        capture_output=True,text=True,check=True)
+    if renamed_name not in diff.stdout or "-#define MIN" not in diff.stdout:
+        abort("missing inspectable bcm4398 driver change diff")
+    (out/"U28_BCM4398_WIFI_MIN_SOURCE_DIFF.txt").write_text(diff.stdout)
+    info={
+        "status":"BCM4398_WIFI_MIN_COLLISION_GUARDED_LOCAL_RENAME_CI_ONLY",
+        "path":"private/google-modules/wlan/bcm4398/wb_regon_coordinator.c",
+        "original_source_sha256":oldsha,
+        "patched_source_sha256":sha(file),
+        "local_macro_replacements":count,
+        "wifi_bcm4398_driver_disabled":False,
+        "uwb_updater_disabled":False,
+        "GKI_minmax_h_changed":False,
+        "source_tree_modified_only_for_diagnostic_build":True,
+        "real_device_flash_gate":"DENY"
+    }
+    (out/"U28_BCM4398_WIFI_MIN_PATCH.json").write_text(json.dumps(info,indent=2)+"\n")
+    print(json.dumps(info,indent=2))
+
+
+def inventory_other_legacy_minmax(src, out):
+    """Inventory remaining likely conflicts; no speculative source rewrites."""
+    root=src/"private/google-modules"
+    examples=[]
+    pattern=re.compile(r"(?m)^[ \t]*#[ \t]*define[ \t]+(MIN|MAX)[ \t]*\(")
+    for file in sorted(root.rglob("*")):
+        if not file.is_file() or file.suffix not in (".c",".h"):
+            continue
+        try:
+            data=file.read_text(errors="replace")
+        except OSError:
+            abort("unable to audit source file: "+str(file))
+        for hit in pattern.finditer(data):
+            examples.append({
+                "file":str(file.relative_to(src)),
+                "macro":hit.group(1),
+                "line":data.count("\n",0,hit.start())+1
+            })
+    (out/"U28_OTHER_LOCAL_MINMAX_DEFINITIONS.json").write_text(
+        json.dumps({
+            "remaining_local_MINMAX_definitions":len(examples),
+            "locations_for_future_individual_source_review":examples,
+            "any_automatic_global_macro_rewrites":False,
+            "pixel8_boot_flash_gate":"DENY"
+        },indent=2)+"\n")
+    print("Other potential MIN/MAX name collisions inventoried:",len(examples))
+
+
 def scan_version(image):
     if not image.is_file():return None
     before=b""
@@ -199,6 +284,8 @@ def audit(src, out, rc):
         "watchdog_VLA_reappeared":("variable length array used" in t and "s3c2410_wdt" in t),
         "DWC3_macro_collision_reappeared":("'DWC3_LLUCTL' macro redefined" in t),
         "BMS_legacy_MAX_macro_collision_reappeared":("'MAX' macro redefined" in t),
+        "some_local_MIN_macro_collision_reappeared":("'MIN' macro redefined" in t),
+        "bcm4398_regon_coordinator_MIN_collision_reappeared":("'MIN' macro redefined" in t and "wb_regon_coordinator.c" in t),
         "UWB_fwupdater_MIN_macro_collision_reappeared":("\'MIN\' macro redefined" in t),
         "RTL8150_usb_helper_error_reappeared":('usb_check_int_endpoints' in t and 'undefined' in t),
     }
@@ -256,5 +343,7 @@ def main():
         patch(a.src,a.u27,a.out)
         patch_bms_legacy_max(a.src,a.out)
         patch_uwb_local_min(a.src,a.out)
+        patch_bcm4398_wifi_local_min(a.src,a.out)
+        inventory_other_legacy_minmax(a.src,a.out)
     else:audit(a.src,a.out,a.exit_code)
 if __name__=="__main__":main()
