@@ -1,0 +1,162 @@
+name: U25 source-only CP2A GKI + shiba driver CI experiment (NO FLASH)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u25-source-only-shusky.yml
+      - scripts/u25_source_only_shusky.py
+      - PHASE_U25.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: u25-shusky-gki-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SHUSKY_BRANCH: android-gs-shusky-6.1-android16
+  GKI_TAG: android14-6.1-2025-12_r9
+  GKI_SHA40: bd23337e42e794964a89f47596daf1209a25ee1a
+
+jobs:
+  gki-shusky-prototype:
+    name: Attempt real Google shusky driver build with pinned GKI 6.1.157
+    runs-on: ubuntu-24.04
+    timeout-minutes: 165
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize disposable runner and official repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p output/u25 "$HOME/bin"
+          python3 -m py_compile scripts/u25_source_only_shusky.py
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/.ghcup || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl dwarves file flex \
+            git libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils zip zstd
+          curl -fsSL --retry 4 https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+          "$HOME/bin/repo" version
+          git config --global user.name "U25 Google kernel study"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Sync upstream shusky sources and vendor driver build toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p shusky-src
+          cd shusky-src
+          "$HOME/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "$SHUSKY_BRANCH"
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/u25/U25_SYNC.log"
+          test -f ./build_shusky.sh
+          test -f aosp/Makefile
+          test -d private/devices/google/shusky
+          df -h /
+
+      - name: Pin kernel/common to the exact CP2A upstream GKI Git commit
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd shusky-src
+          git -C aosp fetch --depth=1 \
+            https://android.googlesource.com/kernel/common "refs/tags/$GKI_TAG"
+          git -C aosp checkout --detach "$GKI_SHA40"
+          actual="$(git -C aosp rev-parse HEAD)"
+          test "$actual" = "$GKI_SHA40"
+          echo "$actual" > "$GITHUB_WORKSPACE/output/u25/U25_COMMON_PINNED_SHA.txt"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          data=Path("aosp/Makefile").read_text()
+          got={}
+          for key in ("VERSION","PATCHLEVEL","SUBLEVEL"):
+              m=re.search(r"^"+key+r"\s*=\s*(\d+)$",data,re.M)
+              if m is None: raise SystemExit("Missing Makefile version: "+key)
+              got[key]=int(m.group(1))
+          assert (got["VERSION"],got["PATCHLEVEL"],got["SUBLEVEL"]) == (6,1,157), got
+          PY
+          "$HOME/bin/repo" manifest -r \
+            -o "$GITHUB_WORKSPACE/output/u25/U25_SHUSKY_GKI_RESOLVED.xml"
+          df -h /
+
+      - name: Patch only obsolete USB NIC and internal USB symbol name (CI ONLY)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          grep -Fq 'build --use_prebuilt_gki=true' shusky-src/private/devices/google/common/device.bazelrc
+          grep -Fq 'build:use_source_tree_aosp --use_prebuilt_gki=false' shusky-src/private/devices/google/common/device.bazelrc
+          python3 scripts/u25_source_only_shusky.py patch --source-dir shusky-src --out output/u25
+          git -C shusky-src/aosp diff -- drivers/net/usb/Kconfig > output/u25/U25_OPTIONAL_USB_NIC_DIFF.txt
+          git -C shusky-src/private/google-modules/soc/gs diff > output/u25/U25_USB_CONTROLLER_NAME_DIFF.txt
+          test -s output/u25/U25_OPTIONAL_USB_NIC_DIFF.txt
+          test -s output/u25/U25_USB_CONTROLLER_NAME_DIFF.txt
+          cat output/u25/U25_RESEARCH_SOURCE_PATCH.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compile shusky vendor modules against pinned GKI (failed compilation is NOT concealed)
+        id: compile
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          set +e
+          ./tools/bazel run --jobs=3 \
+            --config=stamp --config=shusky --config=use_source_tree_aosp \
+            --use_prebuilt_gki=false --use_signed_prebuilts=false \
+            --download_prebuilt_gki_fips140=false \
+            //private/devices/google/shusky:zuma_shusky_dist 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u25/U25_SHUSKY_BUILD_FULL.log"
+          rc="${PIPESTATUS[0]}"
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u25/U25_BUILD_EXIT.txt"
+          if [[ -d out/shusky/dist ]]; then
+            find out/shusky/dist -maxdepth 1 -type f \
+              -printf '%f %s bytes\n' | sort \
+              > "$GITHUB_WORKSPACE/output/u25/U25_DIST_INVENTORY.txt"
+          fi
+          echo "Build script exit code: $rc"
+          exit "$rc"
+
+      - name: Audit actual local GKI and shiba compile result (ALWAYS)
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s output/u25/U25_BUILD_EXIT.txt
+          test -s output/u25/U25_SHUSKY_BUILD_FULL.log
+          python3 scripts/u25_source_only_shusky.py audit \
+            --source-dir shusky-src --out output/u25 \
+            --exit-code "$(cat output/u25/U25_BUILD_EXIT.txt)"
+          cat output/u25/U25_GKI_SOURCE_REBUILD.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture bounded error evidence (no full kernel binaries in artifact)
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -f output/u25/U25_SHUSKY_BUILD_FULL.log ]]; then
+            tail -n 600 output/u25/U25_SHUSKY_BUILD_FULL.log \
+              > output/u25/U25_BUILD_TAIL.log
+          fi
+          if [[ -f output/u25/U25_SYNC.log ]]; then
+            tail -n 200 output/u25/U25_SYNC.log \
+              > output/u25/U25_SYNC_TAIL.log
+          fi
+          rm -f output/u25/U25_SHUSKY_BUILD_FULL.log output/u25/U25_SYNC.log
+
+      - name: Preserve source manifest, research report, failure logs only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u25-SHIBA-SOURCE-GKI-AUDIT-NOT-FLASHABLE-${{ github.run_number }}
+          path: output/u25/
+          retention-days: 21
+          if-no-files-found: warn
