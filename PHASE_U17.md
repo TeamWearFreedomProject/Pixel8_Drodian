@@ -82,9 +82,9 @@ verified during U12, but the full 3GB OTA binary was unavailable in GitHub
 Actions due to official CDN 403 (U13). The device was subsequently
 modified by a husky port, then the user reported restoring the Google
 **shiba-cp2a.260805.005** factory image. **Confirmed official version:
-Android 17.0.0 (August 2026)**, not Android 16. Current successful Android
-boot, exact active slot, verified partition coherence and bootloader lock
-status have **not yet been independently checked**. Do not infer vendor ABI
+Android 17.0.0 (August 2026)**, not Android 16. The user has now independently confirmed successful normal Android boot.
+Exact active slot, partition coherence, full kernel release and bootloader
+lock status have **not yet been checked via ADB**. Do not infer vendor ABI
 from release names alone.
 
 ## Actual device baseline changed — 2026-10-11
@@ -97,20 +97,29 @@ SHA256 `26ca3017652d5df8d5002a449ef079637061165de02396634514387602aad177`.
 Source: https://developers.google.cn/android/images?hl=ja
 (Pixel 8 / shiba row, CP2A.260805.005).
 
-**CRITICAL VERSION MISMATCH:** The U17 CI already running on
-`android-gs-shusky-6.1-android16` is an **Android 16 research build**.
-Even if it passes and produces kernel components, **DO NOT MIX**
-those artifacts with the reported **Android 17 CP2A stock** vendor/system,
-and do not label them CP2A compatible. A future investigation must resolve
-the exact public Android 17 shusky kernel source manifest, matching
-KMI/module ABI, shiba DTBO/panel components, and verified stock image
-provenance before any integration. Continue treating this existing CI run
-as independent, non-deployable source inventory only.
+**CORRECTION: Android OS version is NOT the kernel ABI.**
+Official AOSP documentation assigns the Pixel 8 / Pixel 8 Pro
+`android-gs-shusky-6.1-android16` production-source branch to the
+**`android14-6.1` GKI/KMI family**. The AOSP compatibility matrix explicitly
+lists **`android14-6.1` as supported by both Android 16 and Android 17**.
+Sources:
+- https://source.android.com/docs/setup/build/building-pixel-kernels
+- https://source.android.com/docs/core/architecture/kernel/android-common
 
-The reported factory flash does NOT by itself establish successful normal
-boot or relocked bootloader; request explicit confirmation before assuming
-stock is fully operational. No new flashing or slot changes are necessary
-for this documentation update.
+Therefore the U17 source branch is **NOT disqualified just because
+CP2A.260805.005 runs Android 17**. Whether its exact built kernel works with
+CP2A is **still NOT VERIFIED**. Verify the live `adb shell uname -r`,
+`ro.build.fingerprint` / `ro.vendor.build.fingerprint`, compare the
+`android14-6.1` KMI **generation**, selected GKI patch/commit, module
+`vermagic`, imported/undefined symbols, actual shiba DTBO/panel, and correct
+stock vendor ramdisks and AVB. Generic `6.1` alone is insufficient.
+U17 research outputs remain **DO NOT FLASH**, regardless of green CI.
+
+**The user independently confirmed the restored CP2A factory Android
+boots normally to the home screen.** Bootloader lock state, exact active
+slot and current `uname -r` have not yet been checked via ADB. Normal boot
+does not itself prove the inactive slot is fully restored. No new flashing,
+slot changes or data erasure are necessary to make these checks.
 
 ## Safety scope and criteria to advance
 
