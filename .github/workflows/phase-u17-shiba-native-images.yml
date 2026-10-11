@@ -1,0 +1,125 @@
+name: U17 Pixel 8 shiba source kernel image research (NOT FLASHABLE)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - PHASE_U17.md
+      - .github/workflows/phase-u17-shiba-native-images.yml
+      - scripts/u17_shiba_image_audit.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: u17-shiba-image-research-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MANIFEST_BRANCH: android-gs-shusky-6.1-android16
+  SOURCE_DIR: ${{ github.workspace }}/shusky-src
+
+jobs:
+  source-kernel:
+    name: Google shusky source build / image inventory (QEMU U16 is separate)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout research scripts
+        uses: actions/checkout@v4
+
+      - name: Preflight and prepare disposable runner
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/u17_shiba_image_audit.py
+          mkdir -p output
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/.ghcup || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl dwarves file flex git \
+            libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils zip zstd
+          git config --global user.name "GitHub Actions shiba research"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p "$HOME/bin"
+          curl -fSL --retry 3 https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+          "$HOME/bin/repo" version
+
+      - name: Resolve official Google shusky Android 16 kernel source manifest
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$SOURCE_DIR"
+          cd "$SOURCE_DIR"
+          "$HOME/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "$MANIFEST_BRANCH"
+          "$HOME/bin/repo" manifest -o "$GITHUB_WORKSPACE/output/U17_MANIFEST_BEFORE_SYNC.xml"
+          test -s "$GITHUB_WORKSPACE/output/U17_MANIFEST_BEFORE_SYNC.xml"
+
+      - name: Sync public Google shusky sources (covers shiba AND husky)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SOURCE_DIR"
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/U17_SYNC.log"
+          "$HOME/bin/repo" manifest -r -o "$GITHUB_WORKSPACE/output/U17_MANIFEST_RESOLVED.xml"
+          test -f ./build_shusky.sh
+          test -d ./private/devices/google/shusky
+          find ./private/devices/google/shusky/dts -maxdepth 4 -type f \
+            -printf '%P\n' | sort | head -n 120 \
+            > "$GITHUB_WORKSPACE/output/U17_SOURCE_DTS_LIST.txt"
+          df -h /
+
+      - name: Compile Google shusky vendor-kernel components (NOT Ubuntu)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd "$SOURCE_DIR"
+          bash ./build_shusky.sh 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/U17_KERNEL_BUILD.log"
+          test -d ./out/shusky/dist
+          find ./out/shusky/dist -maxdepth 1 -type f \
+            -printf '%f %s bytes\n' | sort \
+            | tee "$GITHUB_WORKSPACE/output/U17_DIST_LIST.txt"
+
+      - name: Verify available research image formats and SHA256
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u17_shiba_image_audit.py \
+            --dist "$SOURCE_DIR/out/shusky/dist" \
+            --manifest output/U17_MANIFEST_RESOLVED.xml \
+            --out output
+          cat output/U17_SOURCE_IMAGE_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve Google kernel outputs as UNVERIFIED research artifacts ONLY
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u17-SHUSKY-SOURCE-ONLY-DO-NOT-FLASH-${{ github.run_number }}
+          path: |
+            output/U17_SOURCE_IMAGE_REPORT.md
+            output/U17_SOURCE_IMAGE_REPORT.json
+            output/U17_SOURCE_DTS_LIST.txt
+            output/U17_DIST_LIST.txt
+            output/U17_MANIFEST_BEFORE_SYNC.xml
+            output/U17_MANIFEST_RESOLVED.xml
+            output/research-images-UNVERIFIED/*
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Retain detailed build and source sync errors
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u17-BUILD-FAILURE-LOGS-${{ github.run_number }}
+          path: |
+            output/U17_SYNC.log
+            output/U17_KERNEL_BUILD.log
+          retention-days: 7
+          if-no-files-found: warn
