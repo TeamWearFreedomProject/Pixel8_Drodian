@@ -10,9 +10,13 @@ sparse userdata image. The screen is dark, but USB presents VID:PID 0525:a4a2
 (Linux RNDIS Gadget); the Windows 11 host reports Code 10. This is evidence
 of *some* USB gadget enumeration, not proof of a complete Ubuntu boot.
 
-The source of that third-party `husky-boot-images` package and its matching
-`tensor-ubuntu-resolute-arm64.v5-gtk4.sparse.img` is **not established**.
-Therefore, we cannot assume these are suitable for rebuilding for shiba.
+The user identified the third-party boot package as
+[Tensor Linux V1.0](https://github.com/Tenser-Linux/Tensor-Linux/releases/tag/V1.0),
+whose project README supports **Pixel 8 Pro (husky)** only. They uploaded
+nine husky boot-side images for read-only SHA and format checks, and the
+Ubuntu `tensor-ubuntu-resolute-arm64.v5-gtk4.sparse.img` is linked by that
+release but was **not** uploaded or inspected. These husky images are NOT
+a supported shiba boot chain. See PR #2 provenance comment.
 
 Existing [U16](https://github.com/TeamWearFreedomProject/Pixel8_Drodian/actions/runs/38096822658)
 successfully started Ubuntu 26.04 ARM64 with **generic QEMU virtio-GPU DRM**,
@@ -75,9 +79,38 @@ source-kernel build:
 
 Previously available official Evolution X 16.0 shiba release metadata was
 verified during U12, but the full 3GB OTA binary was unavailable in GitHub
-Actions due to official CDN 403 (U13). Also, the device was subsequently
-modified by a husky port, so its current flash slot and partition coherence
-are **unknown**. No inferred vendor ABI or current firmware version.
+Actions due to official CDN 403 (U13). The device was subsequently
+modified by a husky port, then the user reported restoring the Google
+**shiba-cp2a.260805.005** factory image. **Confirmed official version:
+Android 17.0.0 (August 2026)**, not Android 16. Current successful Android
+boot, exact active slot, verified partition coherence and bootloader lock
+status have **not yet been independently checked**. Do not infer vendor ABI
+from release names alone.
+
+## Actual device baseline changed — 2026-10-11
+
+User reports flashing the **Google Pixel 8 shiba factory package
+`shiba-cp2a.260805.005`** after the husky Tensor Linux experiment.
+Official Google factory listing identifies this precise build as
+**Pixel 8 / shiba Android 17, August 2026**, with whole-factory-archive
+SHA256 `26ca3017652d5df8d5002a449ef079637061165de02396634514387602aad177`.
+Source: https://developers.google.cn/android/images?hl=ja
+(Pixel 8 / shiba row, CP2A.260805.005).
+
+**CRITICAL VERSION MISMATCH:** The U17 CI already running on
+`android-gs-shusky-6.1-android16` is an **Android 16 research build**.
+Even if it passes and produces kernel components, **DO NOT MIX**
+those artifacts with the reported **Android 17 CP2A stock** vendor/system,
+and do not label them CP2A compatible. A future investigation must resolve
+the exact public Android 17 shusky kernel source manifest, matching
+KMI/module ABI, shiba DTBO/panel components, and verified stock image
+provenance before any integration. Continue treating this existing CI run
+as independent, non-deployable source inventory only.
+
+The reported factory flash does NOT by itself establish successful normal
+boot or relocked bootloader; request explicit confirmation before assuming
+stock is fully operational. No new flashing or slot changes are necessary
+for this documentation update.
 
 ## Safety scope and criteria to advance
 
