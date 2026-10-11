@@ -208,8 +208,13 @@ def patch_bcm4398_wifi_local_min(src, out):
     diff=subprocess.run(
         ["git","-C",str(wlan),"diff","--","wb_regon_coordinator.c"],
         capture_output=True,text=True,check=True)
-    if renamed_name not in diff.stdout or "-#define MIN" not in diff.stdout:
-        abort("missing inspectable bcm4398 driver change diff")
+    deleted_old=re.search(
+        r"(?m)^-[ \t]*#[ \t]*define[ \t]+MIN(?=[ \t(])",diff.stdout)
+    added_new=re.search(
+        r"(?m)^\+[ \t]*#[ \t]*define[ \t]+BCM4398_REGON_LOCAL_MIN(?=[ \t(])",
+        diff.stdout)
+    if not (deleted_old and added_new):
+        abort("missing inspectable bcm4398 macro declaration diff")
     (out/"U28_BCM4398_WIFI_MIN_SOURCE_DIFF.txt").write_text(diff.stdout)
     info={
         "status":"BCM4398_WIFI_MIN_COLLISION_GUARDED_LOCAL_RENAME_CI_ONLY",
