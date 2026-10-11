@@ -113,6 +113,57 @@ def patch_bms_legacy_max(src, out):
     print(json.dumps(evidence,indent=2))
 
 
+def patch_uwb_local_min(src, out):
+    """Resolve *only* fwupdater.c's private MIN symbol vs modern Linux MIN.
+
+    This keeps the UWB updater compiled and never overwrites kernel minmax.h.
+    A source layout or behavior change is a hard stop, not an excuse to disable
+    UWB or relax -Wmacro-redefined checks.
+    """
+    uwbdir=src/"private/google-modules/uwb/qorvo/qm35/qm35s"
+    file=uwbdir/"libfwupdater/src/fwupdater.c"
+    if not file.is_file():
+        abort("expected Google/Qorvo fwupdater source was not synced")
+    body=file.read_text()
+    signature="#define MIN(a, b) ((a) < (b) ? (a) : (b))"
+    if body.count(signature)!=1:
+        abort("UWB updater MIN definition differs from observed U28 compiler log")
+    modern=(src/"aosp/include/linux/minmax.h").read_text()
+    if not re.search(r"(?m)^[ \t]*#[ \t]*define[ \t]+MIN[ \t]*\([ \t]*a[ \t]*,[ \t]*b[ \t]*\)",modern):
+        abort("expected GKI MIN(a, b) is not present")
+    before_sha=sha(file)
+    oldcalls=len(re.findall(r"\bMIN[ \t]*\(",body))
+    if oldcalls<1:
+        abort("no MIN definition/use found in UWB updater")
+    name="QM35_FWUPDATER_LOCAL_MIN"
+    rewritten,count=re.subn(r"\bMIN(?=[ \t]*\()",name,body)
+    if count!=oldcalls or rewritten.count("#define "+name)!=1:
+        abort("local UWB MIN substitution was incomplete")
+    if re.search(r"\bMIN[ \t]*\(",rewritten):
+        abort("legacy UWB MIN would still collide with modern GKI")
+    file.write_text(rewritten)
+    (out/"U28_UWB_MIN_MACRO_PATCH.json").write_text(json.dumps({
+        "status":"UWB_LOCAL_MIN_RENAMED_IN_ISOLATED_CI_ONLY",
+        "source_path":"private/google-modules/uwb/qorvo/qm35/qm35s/libfwupdater/src/fwupdater.c",
+        "old_SHA256":before_sha,
+        "new_SHA256":sha(file),
+        "macro_replacements":count,
+        "uwb_firmware_updater_disabled":False,
+        "battery_module_disabled":False,
+        "usb_soc_and_watchdog_disabled":False,
+        "GKI_minmax_h_untouched":True,
+        "real_device_flash_gate":"DENY"
+    },indent=2)+"\n")
+    # Capture exactly the single UWB source change as part of the run evidence.
+    diff=subprocess.run(
+        ["git","-C",str(uwbdir),"diff","--","libfwupdater/src/fwupdater.c"],
+        capture_output=True,text=True,check=True)
+    if "QM35_FWUPDATER_LOCAL_MIN" not in diff.stdout:
+        abort("no inspectable UWB updater source diff; stopping")
+    (out/"U28_UWB_MIN_SOURCE_DIFF.txt").write_text(diff.stdout)
+    print("U28 UWB MIN: guarded local macro rename applied, with reviewed diff")
+
+
 def scan_version(image):
     if not image.is_file():return None
     before=b""
@@ -148,6 +199,7 @@ def audit(src, out, rc):
         "watchdog_VLA_reappeared":("variable length array used" in t and "s3c2410_wdt" in t),
         "DWC3_macro_collision_reappeared":("'DWC3_LLUCTL' macro redefined" in t),
         "BMS_legacy_MAX_macro_collision_reappeared":("'MAX' macro redefined" in t),
+        "UWB_fwupdater_MIN_macro_collision_reappeared":("\'MIN\' macro redefined" in t),
         "RTL8150_usb_helper_error_reappeared":('usb_check_int_endpoints' in t and 'undefined' in t),
     }
     succeeded=rc==0 and image.is_file() and version is not None
@@ -203,5 +255,6 @@ def main():
     if a.op=="patch":
         patch(a.src,a.u27,a.out)
         patch_bms_legacy_max(a.src,a.out)
+        patch_uwb_local_min(a.src,a.out)
     else:audit(a.src,a.out,a.exit_code)
 if __name__=="__main__":main()
