@@ -1,0 +1,112 @@
+name: U30 Pixel8 CP2A 6.1.157 GKI provider trace (NO FLASH)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u30-provider-trace.yml
+      - scripts/u30_provider_trace.py
+      - PHASE_U30.md
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: u30-provider-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  source-provider-forensics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare source-only read-only checks
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/bin" output/u30 trace/u30
+          python3 -m py_compile scripts/u30_provider_trace.py
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential curl ca-certificates git python3 libelf-dev \
+            libssl-dev flex cpio lz4 rsync unzip xz-utils zip zstd
+          curl -fsSL --retry 4 \
+            https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+      - name: Get actual successful U28 compiler report and old Image version
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38134737015
+          name: u28-6.1.157-SHIBA-USB-WDT-AUDIT-NOT-FLASHABLE-10
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/u28
+      - name: Sync official shusky sources and pin 6.1.157 common GKI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p shusky-src
+          cd shusky-src
+          "$HOME/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b android-gs-shusky-6.1-android16
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/u30/U30_SOURCE_SYNC.log"
+          git -C aosp fetch --depth=1 \
+            https://android.googlesource.com/kernel/common \
+            refs/tags/android14-6.1-2025-12_r9
+          git -C aosp checkout --detach bd23337e42e794964a89f47596daf1209a25ee1a
+          test "$(git -C aosp rev-parse HEAD)" = bd23337e42e794964a89f47596daf1209a25ee1a
+          "$HOME/bin/repo" manifest -r \
+            -o "$GITHUB_WORKSPACE/output/u30/U30_GOOGLE_SOURCE_REVISIONS.xml"
+          sha256sum private/devices/google/common/device.bazelrc \
+            private/devices/google/shusky/BUILD.bazel aosp/Makefile \
+            > "$GITHUB_WORKSPACE/output/u30/U30_SOURCE_SHA256.txt"
+      - name: Resolve actual configured Bazel GKI provider and shusky dependencies
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          options=(
+            --announce_rc
+            --config=stamp
+            --config=shusky
+            --config=use_source_tree_aosp
+            --use_prebuilt_gki=false
+            --use_signed_prebuilts=false
+            --download_prebuilt_gki_fips140=false
+          )
+          probe() {
+            local name="$1" target="$2" fmt="$3"
+            ./tools/bazel cquery "${options[@]}" "$target" --output="$fmt" \
+              > "$GITHUB_WORKSPACE/trace/u30/U30_"$name"_CQUERY.txt" 2>&1
+            local rc=$?
+            echo "$rc" > "$GITHUB_WORKSPACE/trace/u30/U30_"$name"_EXIT.txt"
+            echo "$name: query exit $rc"
+            tail -n 12 "$GITHUB_WORKSPACE/trace/u30/U30_"$name"_CQUERY.txt"
+            return 0
+          }
+          probe provider //aosp:kernel_aarch64_download_or_build label_kind
+          probe source //aosp:kernel_aarch64 label_kind
+          probe source-rule //aosp:kernel_aarch64_download_or_build build
+          probe shusky-kernel //private/devices/google/shusky:kernel label_kind
+          probe link-path \
+            "somepath(//private/devices/google/shusky:kernel,//aosp:kernel_aarch64_download_or_build)" \
+            label_kind
+      - name: Audit actual old Image release and fail-closed trace
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u30_provider_trace.py \
+            --source shusky-src --u28 evidence/u28/U28_SOURCE_BUILD_REPORT.json \
+            --logs trace/u30 --out output/u30
+          cp trace/u30/*.txt output/u30/
+          python3 -m json.tool output/u30/U30_BAZEL_PROVIDER_TRACE.json >/dev/null
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u30/U30_BAZEL_PROVIDER_TRACE.md
+          cat output/u30/U30_BAZEL_PROVIDER_TRACE.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload only Bazel query logs and source hashes; NO bootable binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u30-CP2A-GKI-PROVIDER-TRACE-NO-FLASH-${{ github.run_number }}
+          path: output/u30/
+          retention-days: 28
+          if-no-files-found: warn
