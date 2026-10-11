@@ -260,6 +260,80 @@ def inventory_other_legacy_minmax(src, out):
     print("Other potential MIN/MAX name collisions inventoried:",len(examples))
 
 
+def patch_mali_gpu_minmax_compat(src, out):
+    """Apply explicit Linux minmax support to one pinned-form GPU header.
+
+    Keep the actual Mali GPU module, all other driver code and -Werror.
+    This research-only API adaptation may have behavioral differences from
+    legacy macros; a successful compile alone does not establish safe GPU use.
+    """
+    gpu=src/"private/google-modules/gpu"
+    header=gpu/"mali_kbase/mali_malisw.h"
+    if not header.is_file():
+        abort("Expected Mali GPU header missing")
+    text=header.read_text()
+    min_line="#define MIN(x, y) ((x) < (y) ? (x) : (y))"
+    max_line="#define MAX(x, y) ((x) < (y) ? (y) : (x))"
+    if text.count(min_line)!=1 or text.count(max_line)!=1:
+        abort("Mali min/max macro implementations no longer match observed compiler error")
+    if text.count("#define _MALISW_H_")!=1:
+        abort("Mali header include guard unexpected")
+    generic=(src/"aosp/include/linux/minmax.h").read_text()
+    for name in ("MIN","MAX"):
+        if not re.search(
+            r"(?m)^[ \t]*#[ \t]*define[ \t]+"+name+
+            r"[ \t]*\([ \t]*a[ \t]*,[ \t]*b[ \t]*\)",generic
+        ):
+            abort("New GKI "+name+" macro not found; refuse to change GPU")
+    if "#include <linux/minmax.h>" in text or "#ifndef MIN" in text:
+        abort("GPU header was already minmax-integrated; review before reapplying")
+
+    # For kernel builds, guarantee the new GKI definitions exist before
+    # GPU C code loads this header; non-kernel users retain older macros.
+    updated=text.replace(
+        "#define _MALISW_H_",
+        "#define _MALISW_H_\n\n"
+        "/* U28 research-only: use kernel MIN/MAX in __KERNEL__ builds. */\n"
+        "#ifdef __KERNEL__\n"
+        "#include <linux/minmax.h>\n"
+        "#endif",1
+    )
+    updated=updated.replace(
+        min_line,"#ifndef MIN\n"+min_line+"\n#endif",1
+    ).replace(
+        max_line,"#ifndef MAX\n"+max_line+"\n#endif",1
+    )
+    if updated.count("#include <linux/minmax.h>")!=1 or updated.count("#ifndef MIN")!=1 or updated.count("#ifndef MAX")!=1:
+        abort("Mali macro protection edit did not apply exactly once")
+    if updated.count(min_line)!=1 or updated.count(max_line)!=1:
+        abort("Mali legacy fallback must be retained exactly")
+    before=sha(header)
+    header.write_text(updated)
+    diff=subprocess.run(
+        ["git","-C",str(gpu),"diff","--","mali_kbase/mali_malisw.h"],
+        capture_output=True,text=True,check=True
+    )
+    if "<linux/minmax.h>" not in diff.stdout or "+#ifndef MIN" not in diff.stdout or "+#ifndef MAX" not in diff.stdout:
+        abort("Mali expected source-only compatibility change not visible in Git diff")
+    (out/"U28_MALI_GPU_MINMAX_SOURCE_DIFF.txt").write_text(diff.stdout)
+    report={
+        "status":"U28_RESEARCH_ONLY_MALI_GPU_GKI_MINMAX_HEADER_ADAPTATION",
+        "source_path":"private/google-modules/gpu/mali_kbase/mali_malisw.h",
+        "source_original_SHA256":before,
+        "source_updated_SHA256":sha(header),
+        "source_legacy_min_max_definitions_preserved_for_non_kernel":True,
+        "kernel_will_resolve_GKI_minmax_first":True,
+        "new_GKI_minmax_semantics_may_differ_from_old_Mali_macros":True,
+        "GPU_module_disabled":False,
+        "Linux_kernel_header_modified":False,
+        "GPU_runtime_or_module_KMI_compatibility_verified":False,
+        "physical_pixel8_tested":False,
+        "real_device_flash_gate":"DENY",
+    }
+    (out/"U28_MALI_GPU_MINMAX_PATCH.json").write_text(json.dumps(report,indent=2)+"\n")
+    print(json.dumps(report,indent=2))
+
+
 def scan_version(image):
     if not image.is_file():return None
     before=b""
@@ -296,6 +370,7 @@ def audit(src, out, rc):
         "DWC3_macro_collision_reappeared":("'DWC3_LLUCTL' macro redefined" in t),
         "BMS_legacy_MAX_macro_collision_reappeared":("'MAX' macro redefined" in t),
         "some_local_MIN_macro_collision_reappeared":("'MIN' macro redefined" in t),
+        "Mali_GPU_minmax_macro_collision_reappeared":("mali_malisw.h" in t and "macro redefined" in t),
         "bcm4398_regon_coordinator_MIN_collision_reappeared":("'MIN' macro redefined" in t and "wb_regon_coordinator.c" in t),
         "UWB_fwupdater_MIN_macro_collision_reappeared":("\'MIN\' macro redefined" in t),
         "RTL8150_usb_helper_error_reappeared":('usb_check_int_endpoints' in t and 'undefined' in t),
@@ -356,5 +431,6 @@ def main():
         patch_uwb_local_min(a.src,a.out)
         patch_bcm4398_wifi_local_min(a.src,a.out)
         inventory_other_legacy_minmax(a.src,a.out)
+        patch_mali_gpu_minmax_compat(a.src,a.out)
     else:audit(a.src,a.out,a.exit_code)
 if __name__=="__main__":main()
