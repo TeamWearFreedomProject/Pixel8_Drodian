@@ -194,7 +194,13 @@ def patch_bcm4398_wifi_local_min(src, out):
         abort("bcm4398 MIN definition/use inventory empty")
     renamed_name="BCM4398_REGON_LOCAL_MIN"
     updated,count=re.subn(r"\bMIN(?=[ \t]*\()",renamed_name,text)
-    if count!=original_count or updated.count("#define "+renamed_name)!=1:
+    # The original Google source may use tabs or multiple spaces between
+    # preprocessor tokens. Match the *token*, not a guessed single-space
+    # serialization such as "#define BCM4398_...".
+    new_definitions=re.findall(
+        r"(?m)^[ \t]*#[ \t]*define[ \t]+BCM4398_REGON_LOCAL_MIN(?=[ \t(])",
+        updated)
+    if count!=original_count or len(new_definitions)!=1:
         abort("Wi-Fi MIN definition or usage not changed uniquely")
     if re.search(r"\bMIN[ \t]*\(",updated):
         abort("Wi-Fi local MIN collision still present after patch")
