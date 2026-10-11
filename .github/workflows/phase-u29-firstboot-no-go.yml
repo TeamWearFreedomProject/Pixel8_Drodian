@@ -1,0 +1,131 @@
+name: U29 Pixel8 CP2A initial Linux boot preflight NO-GO report (NO DEVICE)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u29-firstboot-no-go.yml
+      - scripts/u29_firstboot_gate.py
+      - PHASE_U29.md
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: u29-physical-preflight-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  offline-evidence-firstboot-gate:
+    name: Cross-check actual CI milestones and hold physical shiba firstboot gate closed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify U29 safety report script and set research-only workspace
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/u29_firstboot_gate.py
+          mkdir -p output/u29
+      - name: U18 exact CP2A source GKI build report
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38101661379
+          name: u18-CP2A-GKI-RESEARCH-NOT-FLASHABLE-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u18
+      - name: U19 real older vendor module mismatch
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38103774760
+          name: u19-shiba-vendor-KMI-AUDIT-NOT-BOOTABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u19
+      - name: U20 corrected native rootfs research handoff
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38104039752
+          name: u20-Ubuntu-GKI-OFFLINE-VERIFIED-DO-NOT-FLASH-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u20
+      - name: U23 real Ubuntu QEMU guest boot proof
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38107883009
+          name: u23-QEMU-UBUNTU-BOOT-EVIDENCE-NOT-PIXEL-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u23
+      - name: U24 pinned Google Bazelrc and USB source evidence
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38112137454
+          name: u24-COMMON-PROVIDER-DWC3-PROVENANCE-NOTFLASH-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u24
+      - name: U26 four fail-closed real QEMU boots
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38112424946
+          name: u26-QEMU-BOOT-NEGATIVE-GATE-PHONE-DENY-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u26
+      - name: U27 pinned official Google watchdog source audit
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38113084815
+          name: u27-GKI-KMI-WATCHDOG-SOURCE-AUDIT-NOT-FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u27
+      - name: Read official U28 GitHub workflow status, NEVER infer success from draft code
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          curl -fsSL --retry 3 -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/runs/38113211356" \
+            > output/u29/U28_GITHUB_API_RAW.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("output/u29/U28_GITHUB_API_RAW.json").read_text())
+          allow=("id","head_branch","head_sha","status","conclusion","html_url","updated_at")
+          x={k:d.get(k) for k in allow}
+          if x["id"]!=38113211356:
+              raise SystemExit("U28 workflow ID changed")
+          Path("output/u29/U28_WORKFLOW_STATE.json").write_text(json.dumps(x,indent=2)+"\n")
+          print(json.dumps(x,indent=2))
+          PY
+          rm -f output/u29/U28_GITHUB_API_RAW.json
+      - name: Verify U18-U27 real CI evidence, publish fail-closed physical boot verdict
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u29_firstboot_gate.py \
+            --u18 input/u18/U18_CP2A_GKI_REPORT.json \
+            --u19 input/u19/U19_VENDOR_ABI_REPORT.json \
+            --u20 input/u20/U20_OFFLINE_INTEGRATION.json \
+            --u23 input/u23/U23_BOOT_HANDOFF.json \
+            --u24 input/u24/U24_PROVIDER_AUDIT.json \
+            --u26 input/u26/U26_BOOT_SAFETY_GATE.json \
+            --u27 input/u27/U27_KMI_WATCHDOG_DIAGNOSIS.json \
+            --u28workflow output/u29/U28_WORKFLOW_STATE.json \
+            --out output/u29
+          python3 -m json.tool output/u29/U29_FIRSTBOOT_PREFLIGHT.json >/dev/null
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u29/U29_FIRSTBOOT_PREFLIGHT.md
+          grep -Fq 'first boot is NOT APPROVED' output/u29/U29_FIRSTBOOT_PREFLIGHT.md
+          cat output/u29/U29_FIRSTBOOT_PREFLIGHT.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Save only reproducible firstboot NO-GO safety report, no kernel/boot image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u29-CP2A-FIRSTBOOT-NO-GO-PROVENANCE-${{ github.run_number }}
+          path: output/u29/
+          retention-days: 28
+          if-no-files-found: warn
