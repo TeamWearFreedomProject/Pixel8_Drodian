@@ -1,0 +1,153 @@
+name: U26 Ubuntu guarded boot negative-case QEMU tests and Pixel8 DENY preflight
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u26-boot-gate.yml
+      - scripts/u26_first_boot_gate.py
+      - PHASE_U26.md
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: u26-boot-gate-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  actual-virtual-failure-injection:
+    name: Test fail-closed Ubuntu early boot under generic ARM64 QEMU
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup isolated generic ARM64 VM with genuine ext4 archive tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/u26_first_boot_gate.py
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-arm e2fsprogs lz4 cpio
+          mkdir -p inputs/u6 inputs/u9 inputs/u18 inputs/u19 inputs/u20 inputs/u23 inputs/u24 output/u26
+      - name: Get original U6 Ubuntu 26.04 ext4 DATA image (read-only guest)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38047914957
+          name: shiba-u6-ubuntu-ext4-NOT_BOOTABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u6
+      - name: Get known working QEMU ARM64 Linux guest kernel (not Pixel)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38059787754
+          name: u9-generic-qemu-arm64-kernel-6
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u9
+      - name: Get U18 pinned 6.1.157 source-provenance kernel report
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38101661379
+          name: u18-CP2A-GKI-RESEARCH-NOT-FLASHABLE-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u18
+      - name: Get U19 obsolete vendor driver mismatch audit
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38103774760
+          name: u19-shiba-vendor-KMI-AUDIT-NOT-BOOTABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u19
+      - name: Get updated audited guarded ARM64 first-stage initramfs
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38104039752
+          name: u20-Ubuntu-GKI-OFFLINE-VERIFIED-DO-NOT-FLASH-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u20
+      - name: Get previously successful QEMU Ubuntu systemd real-boot report
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38107883009
+          name: u23-QEMU-UBUNTU-BOOT-EVIDENCE-NOT-PIXEL-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u23
+      - name: Get official source provider and USB DWC3 incompatibility audit
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38112137454
+          name: u24-COMMON-PROVIDER-DWC3-PROVENANCE-NOTFLASH-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u24
+      - name: Check pinned rootfs and QEMU kernel hashes before any guest
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rootfs=inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img
+          kernel=inputs/u9/build/linux-6.6.89/arch/arm64/boot/Image
+          initrd=inputs/u20/u20-REBUILT-ARM64-GUARDED-INITRAMFS-NOT_FLASHABLE.cpio.lz4
+          echo "d3cbe5e0a0e170e9e1e3071b32394e0ddd686887351ed1f4aa2b8bed814bde9e  $rootfs" | sha256sum -c -
+          echo "718c5584d0a1a69943c68689c0dadbd9b0ce6623e48e9a1b97429293c41efddc  $kernel" | sha256sum -c -
+          echo "827ded5bce36ce87238645536a77ce3a464236edbeaaa61cd1bba617d8d72c1c  $initrd" | sha256sum -c -
+          test "$(stat -c %s "$rootfs")" = 2147483648
+          uuid="$(dumpe2fs -h "$rootfs" 2>/dev/null | awk '/^Filesystem UUID:/ {print $3}')"
+          test -n "$uuid"
+          echo "U26_ONLY_OFFLINE_GUEST_UUID=$uuid" >> "$GITHUB_ENV"
+      - name: Boot four real negative QEMU guests, no init script edits or partition writes
+        shell: bash
+        run: |
+          set -euxo pipefail
+          kernel="$PWD/inputs/u9/build/linux-6.6.89/arch/arm64/boot/Image"
+          initrd="$PWD/inputs/u20/u20-REBUILT-ARM64-GUARDED-INITRAMFS-NOT_FLASHABLE.cpio.lz4"
+          rootfs="$PWD/inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img"
+          prefix='console=ttyAMA0,115200 earlycon=pl011,0x9000000 loglevel=5 rdinit=/init'
+          safe_gate='u8.research_gate=I_UNDERSTAND_THIS_IS_UNVERIFIED'
+          run_guest() {
+            local name="$1" extra="$2"
+            local rc
+            set +e
+            timeout -k 5 26 qemu-system-aarch64 \
+              -M virt,gic-version=3 -cpu cortex-a72 -smp 2 -m 2048 \
+              -nodefaults -display none -monitor none -serial stdio -no-reboot -nic none \
+              -kernel "$kernel" -initrd "$initrd" \
+              -drive "if=none,format=raw,readonly=on,file=$rootfs,id=u6disk" \
+              -device virtio-blk-device,drive=u6disk \
+              -append "$prefix $extra" > "output/u26/U26_$name.log" 2>&1
+            rc=$?
+            set -e
+            printf '%s: exit %s\n' "$name" "$rc" >> output/u26/U26_VM_EXIT_STATUS.txt
+            test "$rc" -eq 124 -o "$rc" -eq 0
+          }
+          run_guest NO_CONSENT "u8.rootuuid=$U26_ONLY_OFFLINE_GUEST_UUID"
+          run_guest BAD_UUID "u8.rootuuid=not-a-uuid $safe_gate"
+          run_guest DUPLICATE_UUID "u8.rootuuid=$U26_ONLY_OFFLINE_GUEST_UUID u8.rootuuid=$U26_ONLY_OFFLINE_GUEST_UUID $safe_gate"
+          run_guest UNMATCHED_UUID "u8.rootuuid=00000000-0000-0000-0000-000000000000 $safe_gate"
+      - name: Verify actual guest HALTs, unmodified U6 disk and physical flash DENY
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u26_first_boot_gate.py \
+            --rootfs inputs/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img \
+            --qemu-kernel inputs/u9/build/linux-6.6.89/arch/arm64/boot/Image \
+            --u20-initramfs inputs/u20/u20-REBUILT-ARM64-GUARDED-INITRAMFS-NOT_FLASHABLE.cpio.lz4 \
+            --u18-report inputs/u18/U18_CP2A_GKI_REPORT.json \
+            --u19-report inputs/u19/U19_VENDOR_ABI_REPORT.json \
+            --u20-report inputs/u20/U20_OFFLINE_INTEGRATION.json \
+            --u23-report inputs/u23/U23_BOOT_HANDOFF.json \
+            --u24-report inputs/u24/U24_PROVIDER_AUDIT.json \
+            --logdir output/u26 --out output/u26
+          python3 -m json.tool output/u26/U26_BOOT_SAFETY_GATE.json >/dev/null
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u26/U26_BOOT_SAFETY_GATE.md
+          cat output/u26/U26_BOOT_SAFETY_GATE.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve only tests/guest logs, NEVER a flash package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u26-QEMU-BOOT-NEGATIVE-GATE-PHONE-DENY-${{ github.run_number }}
+          path: output/u26/
+          retention-days: 28
+          if-no-files-found: warn
