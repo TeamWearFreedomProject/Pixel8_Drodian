@@ -1,0 +1,151 @@
+name: U34 official Ubuntu 26.04 ARM64 QEMU boot smoke (NO PHONE / NO FLASH)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u34-ubuntu2604-qemu-arm64.yml
+      - scripts/u34_qemu_boot_gate.py
+      - PHASE_U34.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: u34-qemu-ubuntu-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  official-ubuntu-arm64-generic-qemu:
+    name: Boot real Ubuntu 26.04 ARM64 userspace in generic QEMU (NOT Pixel 8)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare isolated QEMU runner and syntax-check U34 audit
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p output/u34 u34-vm
+          python3 -m py_compile scripts/u34_qemu_boot_gate.py
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils curl ca-certificates
+          test -s /usr/share/qemu-efi-aarch64/QEMU_EFI.fd
+          qemu-system-aarch64 --version
+          df -h /
+
+      - name: Obtain exact official Ubuntu 26.04 ARM64 cloud image and verify published SHA256
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd u34-vm
+          base=https://cloud-images.ubuntu.com/releases/resolute/release
+          image=ubuntu-26.04-server-cloudimg-arm64.img
+          curl -fL --retry 4 --connect-timeout 30 \
+            "$base/SHA256SUMS" -o SHA256SUMS
+          grep -E '[[:space:]]\*?ubuntu-26[.]04-server-cloudimg-arm64[.]img$' SHA256SUMS \
+            > image-only-SHA256SUMS
+          test "$(wc -l < image-only-SHA256SUMS)" = 1
+          curl -fL --retry 5 --connect-timeout 30 \
+            --max-time 2100 \
+            "$base/$image" -o "$image"
+          sha256sum --check image-only-SHA256SUMS
+          sha256sum "$image" | cut -d ' ' -f1 \
+            > "$GITHUB_WORKSPACE/output/u34/OFFICIAL_UBUNTU2604_ARM64_SHA256.txt"
+          qemu-img info --output=json "$image" \
+            > "$GITHUB_WORKSPACE/output/u34/OFFICIAL_UBUNTU2604_ARM64_QCOW2_INFO.json"
+          test "$(qemu-img info --output=json "$image" | python3 -c 'import sys,json;print(json.load(sys.stdin)["format"])')" = qcow2
+          df -h /
+
+      - name: Create cloud-init serial witness and ephemeral COW disk (no password, no device)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd u34-vm
+          cat > user-data <<'CLOUDCFG'
+          #cloud-config
+          hostname: u34-arm64-qemu
+          package_update: false
+          package_upgrade: false
+          ssh_pwauth: false
+          disable_root: true
+          bootcmd:
+            - [sh, -c, 'echo U34_BOOTCMD_ARM64_REACHED >/dev/ttyAMA0']
+          runcmd:
+            - [sh, -c, 'printf "U34_CLOUD_INIT_FINAL_ARCH=%s\n" "$(uname -m)" > /dev/ttyAMA0']
+            - [sh, -c, '. /etc/os-release; printf "U34_CLOUD_INIT_FINAL_VERSION=%s\n" "$VERSION_ID" >/dev/ttyAMA0']
+            - [sh, -c, 'echo U34_CLOUD_INIT_FINAL_SUCCESS >/dev/ttyAMA0']
+          power_state:
+            mode: poweroff
+            delay: now
+            timeout: 90
+            condition: true
+          CLOUDCFG
+          cat > meta-data <<'METADATA'
+          instance-id: u34-ubuntu2604-arm64-qemu-ci
+          local-hostname: u34-arm64-qemu
+          METADATA
+          cloud-localds seed.img user-data meta-data
+          qemu-img create -f qcow2 \
+            -F qcow2 \
+            -b "$(pwd)/ubuntu-26.04-server-cloudimg-arm64.img" \
+            u34-test-overlay.qcow2 8G
+          test -s seed.img
+          test -s u34-test-overlay.qcow2
+
+      - name: Actual Ubuntu 26.04 ARM64 cloud-init serial boot using QEMU TCG
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd u34-vm
+          set +e
+          timeout --signal=TERM --kill-after=35s 27m \
+            qemu-system-aarch64 \
+              -machine virt -cpu cortex-a72 -smp 2 -m 2048 \
+              -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+              -display none -monitor none -serial stdio \
+              -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+              -device virtio-rng-pci \
+              -drive if=none,id=disk,file=u34-test-overlay.qcow2,format=qcow2 \
+              -device virtio-blk-pci,drive=disk \
+              -drive if=none,id=cloudseed,file=seed.img,format=raw,readonly=on \
+              -device virtio-blk-pci,drive=cloudseed \
+            > u34-qemu-full-serial.log 2>&1
+          rc=$?
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u34/U34_QEMU_REAL_EXIT.txt"
+          printf 'U34 QEMU exit status: %s\n' "$rc"
+          grep -E 'U34_|VERSION_ID=|Linux version|cloud-init.*finished' \
+            u34-qemu-full-serial.log | tail -n 40 || true
+          cd "$GITHUB_WORKSPACE"
+          python3 scripts/u34_qemu_boot_gate.py \
+            --boot-log u34-vm/u34-qemu-full-serial.log \
+            --rc output/u34/U34_QEMU_REAL_EXIT.txt \
+            --image-sha output/u34/OFFICIAL_UBUNTU2604_ARM64_SHA256.txt \
+            --image-info output/u34/OFFICIAL_UBUNTU2604_ARM64_QCOW2_INFO.json \
+            --out output/u34
+          cat output/u34/U34_QEMU_ARM64_UBUNTU2604_SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve only guest witness lines and cloud-image hashes even on failure
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if test -f u34-vm/u34-qemu-full-serial.log; then
+            grep -E 'U34_BOOTCMD|U34_CLOUD_INIT_FINAL|VERSION_ID=' \
+              u34-vm/u34-qemu-full-serial.log | tail -n 45 \
+              > output/u34/U34_QEMU_SERIAL_WITNESS_LINES.txt || true
+            rm -f u34-vm/u34-qemu-full-serial.log
+          fi
+          printf '%s\n' \
+            'QEMU guest uses generic Ubuntu kernel and virt board, NEVER Pixel 8 hardware. NO CP2A ABI/DTBO/AVB verification. REAL DEVICE FLASH GATE: DENY.' \
+            > output/u34/U34_REAL_PIXEL8_FLASH_GATE_DENY.txt
+
+      - name: Upload hashes, text and failed-boot witness ONLY (no cloud disk images)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u34-UBUNTU-2604-ARM64-QEMU-REPORT-NOT-FLASHABLE-${{ github.run_number }}
+          path: output/u34/
+          retention-days: 21
+          if-no-files-found: warn
