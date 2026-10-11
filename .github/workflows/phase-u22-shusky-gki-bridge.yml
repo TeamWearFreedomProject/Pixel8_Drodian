@@ -88,6 +88,97 @@ jobs:
             -o "$GITHUB_WORKSPACE/output/u22/U22_SHUSKY_GKI_RESOLVED.xml"
           df -h /
 
+      - name: Research-only Kconfig probe: omit obsolete USB RTL8150 NIC module, never flash
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("shusky-src/aosp/drivers/net/usb/Kconfig")
+          data=p.read_text()
+          needle="config USB_RTL8150\n"
+          if data.count(needle)!=1:
+              raise SystemExit("Cannot safely locate the old USB RTL8150 module Kconfig entry")
+          # U22 diagnostic ONLY. The module uses a USB interrupt helper absent
+          # from the pinned GKI exports. A genuine CP2A release MUST NOT
+          # silently lose a driver; this is NOT a shipping kernel config.
+          updated=data.replace(needle,needle+"\tdepends on BROKEN\n",1)
+          p.write_text(updated)
+          assert data!=updated
+          print("U22 temporary research source edit: CONFIG_USB_RTL8150 unavailable")
+          PY
+          {
+            echo 'U22 DIAGNOSTIC ONLY: excluded CONFIG_USB_RTL8150 legacy external USB Ethernet NIC.'
+            echo 'Reason: 6.1.157 pinned GKI modpost undefined usb_check_int_endpoints.'
+            echo 'Kernel/common Git HEAD is still the pinned upstream commit, but the working tree is MODIFIED.'
+            echo 'This is NOT a bit-exact CP2A source build. No stock compatibility is implied.'
+            echo 'All research binaries are DO NOT FLASH; never deploy a modified kernel.'
+          } > output/u22/U22_RESEARCH_KCONFIG_OVERRIDE.txt
+          git -C shusky-src/aosp status --short
+          grep -A3 '^config USB_RTL8150
+        id: compile
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          set +e
+          bash ./build_shusky.sh 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u22/U22_SHUSKY_BUILD_FULL.log"
+          rc="${PIPESTATUS[0]}"
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u22/U22_BUILD_EXIT.txt"
+          if [[ -d out/shusky/dist ]]; then
+            find out/shusky/dist -maxdepth 1 -type f \
+              -printf '%f %s bytes\n' | sort \
+              > "$GITHUB_WORKSPACE/output/u22/U22_DIST_INVENTORY.txt"
+          fi
+          echo "Build script exit code: $rc"
+          exit "$rc"
+
+      - name: Audit exact kernel release, vendor sources, modules and build outcome
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s output/u22/U22_COMMON_PINNED_SHA.txt
+          test -s output/u22/U22_SHUSKY_GKI_RESOLVED.xml
+          test -s output/u22/U22_SHUSKY_BUILD_FULL.log
+          rc="$(cat output/u22/U22_BUILD_EXIT.txt)"
+          python3 scripts/u22_shusky_gki_attempt.py \
+            --source-dir shusky-src \
+            --manifest output/u22/U22_SHUSKY_GKI_RESOLVED.xml \
+            --log output/u22/U22_SHUSKY_BUILD_FULL.log \
+            --build-exit "$rc" \
+            --checkout-commit output/u22/U22_COMMON_PINNED_SHA.txt \
+            --out output/u22
+          cat output/u22/U22_SHUSKY_6_1_157_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Capture bounded error evidence (no full kernel binaries in artifact)
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -f output/u22/U22_SHUSKY_BUILD_FULL.log ]]; then
+            tail -n 600 output/u22/U22_SHUSKY_BUILD_FULL.log \
+              > output/u22/U22_BUILD_TAIL.log
+          fi
+          if [[ -f output/u22/U22_SYNC.log ]]; then
+            tail -n 200 output/u22/U22_SYNC.log \
+              > output/u22/U22_SYNC_TAIL.log
+          fi
+          rm -f output/u22/U22_SHUSKY_BUILD_FULL.log output/u22/U22_SYNC.log
+
+      - name: Preserve source manifest, research report, failure logs only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u22-shusky-6.1.157-AUDIT-NOT-FLASHABLE-${{ github.run_number }}
+          path: output/u22/
+          retention-days: 21
+          if-no-files-found: warn
+ shusky-src/aosp/drivers/net/usb/Kconfig
+          cat output/u22/U22_RESEARCH_KCONFIG_OVERRIDE.txt >> "$GITHUB_STEP_SUMMARY"
+
       - name: Compile shusky vendor modules against pinned GKI (failed compilation is NOT concealed)
         id: compile
         shell: bash
