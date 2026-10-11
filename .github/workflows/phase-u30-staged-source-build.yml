@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/phase-u30-staged-source-build.yml
       - scripts/u30_staged_build_gate.py
+      - scripts/u30_fix_rtl8150_defconfig.py
   workflow_dispatch:
 
 permissions:
@@ -35,6 +36,7 @@ jobs:
           python3 -m py_compile \
             scripts/u30_source_alias_experiment.py \
             scripts/u30_staged_build_gate.py \
+            scripts/u30_fix_rtl8150_defconfig.py \
             scripts/u28_watchdog_kmi_build.py \
             scripts/u25_source_only_shusky.py
           df -h /
@@ -88,6 +90,12 @@ jobs:
             shusky-src/private/devices/google/common/device.bazelrc
           python3 scripts/u25_source_only_shusky.py patch \
             --source-dir shusky-src --out output/u30-build
+          # U25's approved optional RTL8150 exclusion removes the Kconfig
+          # symbol; reconcile EXACTLY its stale gki_defconfig request before
+          # a native source-kernel build runs the strict savedefconfig gate.
+          python3 scripts/u30_fix_rtl8150_defconfig.py \
+            --src shusky-src --out output/u30-build
+          test -s output/u30-build/U30_OPTIONAL_RTL8150_CONFIG_DIFF.txt
           python3 scripts/u28_watchdog_kmi_build.py patch \
             --src shusky-src --u27 evidence/u27/U27_KMI_WATCHDOG_DIAGNOSIS.json \
             --out output/u30-build
