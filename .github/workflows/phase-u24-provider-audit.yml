@@ -1,0 +1,74 @@
+name: U24 CP2A GKI prebuilt provider and DWC3 header investigation (NO FLASH)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u24-provider-audit.yml
+      - scripts/u24_provider_audit.py
+      - PHASE_U24.md
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: u24-provider-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  PIN_COMMON: bd23337e42e794964a89f47596daf1209a25ee1a
+  PIN_PIXEL_COMMON: 397babd94c06783d8430c838475955f0b6ff63c2
+  PIN_SOC: 057ab18a9cc0e318538b419eafc565a7fbe1d320
+jobs:
+  verify-official-source-and-errors:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Obtain actual prior U22 failure logs and pinned source manifest
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38108299006
+          name: u22-shusky-6.1.157-AUDIT-NOT-FLASHABLE-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: inputs/u22
+      - name: Download exact revision official Google Bazelrc and USB headers
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p sources output/u24
+          gitiles_download() {
+            local repository="$1" sha="$2" file="$3" dest="$4"
+            curl -fsSL --retry 4 \
+              "https://android.googlesource.com/kernel/$repository/+/$sha/$file?format=TEXT" \
+              | base64 -d > "$dest"
+            test -s "$dest"
+          }
+          gitiles_download devices/google/common "$PIN_PIXEL_COMMON" \
+            device.bazelrc sources/pixel_device.bazelrc
+          gitiles_download google-modules/soc/gs "$PIN_SOC" \
+            include/linux/usb/dwc3-exynos.h sources/dwc3-exynos.h
+          gitiles_download common "$PIN_COMMON" \
+            drivers/usb/dwc3/core.h sources/dwc3-core.h
+          sha256sum sources/* > output/u24/U24_OFFICIAL_FILE_SHA256.txt
+      - name: Confirm forced old GKI provider and internal USB macro API mismatch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/u24_provider_audit.py
+          python3 scripts/u24_provider_audit.py \
+            --manifest inputs/u22/U22_SHUSKY_GKI_RESOLVED.xml \
+            --u22log inputs/u22/U22_BUILD_TAIL.log \
+            --devicebazelrc sources/pixel_device.bazelrc \
+            --soch sources/dwc3-exynos.h \
+            --gkih sources/dwc3-core.h \
+            --out output/u24
+          python3 -m json.tool output/u24/U24_PROVIDER_AUDIT.json >/dev/null
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u24/U24_PROVIDER_AUDIT.md
+          cat output/u24/U24_PROVIDER_AUDIT.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Save only source identity and proof, never bootable binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u24-COMMON-PROVIDER-DWC3-PROVENANCE-NOTFLASH-${{ github.run_number }}
+          path: output/u24/
+          retention-days: 28
+          if-no-files-found: warn
