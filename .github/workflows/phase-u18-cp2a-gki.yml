@@ -1,0 +1,202 @@
+name: U18 Pixel 8 CP2A exact 6.1.157 GKI source and research build (NO FLASH)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u18-cp2a-gki.yml
+      - PHASE_U18.md
+      - scripts/u18_cp2a_gki_verify.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: u18-cp2a-gki-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GKI_TAG: android14-6.1-2025-12_r9
+  GKI_COMMIT: bd23337e42e794964a89f47596daf1209a25ee1a
+  MANIFEST_BRANCH: common-android14-6.1-2025-12
+  STOCK_DEVICE: shiba
+  STOCK_BUILD: CP2A.260805.005
+  STOCK_KERNEL: 6.1.157-android14-11-gbd23337e42e7-ab14791245
+
+jobs:
+  source-pin:
+    name: Verify official 40-hex source tag + 6.1.157 Makefile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Query Google Git tag and its actual commit, never a moving branch HEAD
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p output/u18-source
+          git ls-remote https://android.googlesource.com/kernel/common \
+            "refs/tags/$GKI_TAG" "refs/tags/$GKI_TAG^{}" \
+            | tee output/u18-source/U18_GIT_LS_REMOTE.txt
+          sha="$(awk '$2 ~ /\^\{\}$/ {print $1}' output/u18-source/U18_GIT_LS_REMOTE.txt)"
+          test -n "$sha"
+          test "$sha" = "$GKI_COMMIT"
+          printf '%s\n' "$sha" > output/u18-source/U18_TAG_COMMIT.txt
+          curl -fsSL --retry 4 \
+            "https://android.googlesource.com/kernel/common/+/$GKI_COMMIT/Makefile?format=TEXT" \
+            | base64 -d > output/u18-source/U18_OFFICIAL_MAKEFILE
+          test -s output/u18-source/U18_OFFICIAL_MAKEFILE
+          python3 scripts/u18_cp2a_gki_verify.py \
+            --phase source \
+            --tag-commit "$sha" \
+            --makefile output/u18-source/U18_OFFICIAL_MAKEFILE \
+            --out output/u18-source
+          cat output/u18-source/U18_CP2A_GKI_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload pinned source verification and status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u18-CP2A-EXACT-GKI-SOURCE-AUDIT-${{ github.run_number }}
+          path: output/u18-source/
+          retention-days: 21
+          if-no-files-found: warn
+
+  build-official-gki:
+    name: Build Google GKI 6.1.157 from pinned r9 (NOT shiba Ubuntu boot)
+    needs: source-pin
+    runs-on: ubuntu-24.04
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare disposable GitHub Linux runner
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p output/u18-build
+          df -h /
+          free -h
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/.ghcup || true
+          sudo apt-get clean
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl file flex git \
+            libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils zip zstd
+          git config --global user.name "GitHub Actions U18 kernel research"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p "$HOME/bin"
+          curl -fsSL --retry 4 \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+          "$HOME/bin/repo" version
+          df -h /
+
+      - name: Sync official common GKI manifest and pinned toolchains
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p gki-src
+          cd gki-src
+          "$HOME/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "$MANIFEST_BRANCH"
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u18-build/U18_GKI_SYNC.log"
+          test -f common/Makefile
+          test -x tools/bazel
+          df -h /
+
+      - name: Replace moving GKI HEAD with exact officially released source commit
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd gki-src
+          # repo sync can create a checkout without an "origin" remote.
+          # Fetch the exact official tag from an explicit Google URL instead.
+          git -C common fetch --depth=1 \
+            https://android.googlesource.com/kernel/common \
+            "refs/tags/$GKI_TAG"
+          git -C common checkout --detach "$GKI_COMMIT"
+          actual="$(git -C common rev-parse HEAD)"
+          test "$actual" = "$GKI_COMMIT"
+          echo "$actual" > "$GITHUB_WORKSPACE/output/u18-build/U18_CHECKED_OUT_COMMIT.txt"
+          "$HOME/bin/repo" manifest -r \
+            -o "$GITHUB_WORKSPACE/output/u18-build/U18_RESOLVED_MANIFEST.xml"
+          python3 "$GITHUB_WORKSPACE/scripts/u18_cp2a_gki_verify.py" \
+            --phase source \
+            --tag-commit "$actual" \
+            --makefile common/Makefile \
+            --out "$GITHUB_WORKSPACE/output/u18-build"
+          df -h /
+
+      - name: Compile AArch64 GKI kernel from Google r9 sources (never connect a device)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd gki-src
+          mkdir -p "$GITHUB_WORKSPACE/output/u18-build/dist"
+          # AOSP canonical Kleaf GKI AArch64 target.
+          ./tools/bazel run --jobs=3 //common:kernel_aarch64_dist \
+            -- --destdir="$GITHUB_WORKSPACE/output/u18-build/dist" 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u18-build/U18_KLEAF_BUILD.log"
+          test -s "$GITHUB_WORKSPACE/output/u18-build/dist/Image"
+          df -h /
+
+      - name: Audit compiled AArch64 kernel; FAIL CLOSED for any CP2A boot use
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u18_cp2a_gki_verify.py \
+            --phase build \
+            --tag-commit "$GKI_COMMIT" \
+            --makefile gki-src/common/Makefile \
+            --manifest output/u18-build/U18_RESOLVED_MANIFEST.xml \
+            --dist output/u18-build/dist \
+            --out output/u18-build
+          find output/u18-build/dist -maxdepth 1 -type f \
+            -printf '%f %s bytes\n' | sort \
+            > output/u18-build/U18_BUILT_FILE_LIST.txt
+          cat output/u18-build/U18_CP2A_GKI_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p output/u18-build/research-UNVERIFIED
+          cp output/u18-build/dist/Image \
+            output/u18-build/research-UNVERIFIED/GKI-6.1.157-r9-Image-DO-NOT-FLASH
+
+      - name: Preserve verified research outputs (explicitly not shiba flash firmware)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u18-CP2A-GKI-RESEARCH-NOT-FLASHABLE-${{ github.run_number }}
+          path: |
+            output/u18-build/U18_CP2A_GKI_REPORT.json
+            output/u18-build/U18_CP2A_GKI_REPORT.md
+            output/u18-build/U18_CHECKED_OUT_COMMIT.txt
+            output/u18-build/U18_RESOLVED_MANIFEST.xml
+            output/u18-build/U18_BUILT_FILE_LIST.txt
+            output/u18-build/research-UNVERIFIED/*
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Capture bounded build troubleshooting logs only on failure
+        if: failure()
+        shell: bash
+        run: |
+          set +e
+          for name in U18_GKI_SYNC.log U18_KLEAF_BUILD.log; do
+            if [[ -f "output/u18-build/$name" ]]; then
+              tail -n 2000 "output/u18-build/$name" \
+                > "output/u18-build/$(basename "$name" .log)-TAIL.log"
+            fi
+          done
+
+      - name: Preserve error evidence for reproducible fixes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u18-FAILED-BUILD-DIAGNOSTICS-${{ github.run_number }}
+          path: |
+            output/u18-build/*-TAIL.log
+            output/u18-build/U18_CHECKED_OUT_COMMIT.txt
+            output/u18-build/U18_RESOLVED_MANIFEST.xml
+          retention-days: 7
+          if-no-files-found: warn
