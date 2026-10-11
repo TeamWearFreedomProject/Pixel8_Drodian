@@ -29,7 +29,9 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends e2fsprogs lz4 cpio
+          sudo apt-get install -y --no-install-recommends \
+            e2fsprogs lz4 cpio binutils gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross qemu-user-static
           python3 -m py_compile scripts/u20_offline_handoff_audit.py
           mkdir -p input/u6 input/u8 input/u18 input/u19 output/u20
           df -h /
@@ -70,6 +72,44 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: input/u19
 
+      - name: Rebuild stale U8 ramdisk with audited /init + read-only AArch64 UUID probe
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p stage/u20ramdisk/bin
+          lz4 -dc input/u8/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 \
+            > output/u20/u8-old-pinned.cpio
+          (cd stage/u20ramdisk && cpio -i --make-directories \
+            --no-absolute-filenames --no-preserve-owner --quiet \
+            < ../../output/u20/u8-old-pinned.cpio)
+          test -x stage/u20ramdisk/bin/busybox
+          install -m 0755 scripts/u8_init stage/u20ramdisk/init
+          sh -n stage/u20ramdisk/init
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror -static \
+            scripts/u9_rootfs_probe.c -o stage/u20ramdisk/bin/u8-rootfs-probe
+          gcc -O2 -Wall -Wextra -Werror -static \
+            scripts/u9_rootfs_probe.c -o stage/u20-probe-host
+          readelf -h stage/u20ramdisk/bin/u8-rootfs-probe \
+            | grep -F 'Machine:' | grep -q AArch64
+          if readelf -l stage/u20ramdisk/bin/u8-rootfs-probe | grep -q INTERP; then
+            echo '::error::U20 requires a statically linked ARM64 probe'
+            exit 1
+          fi
+          img="$PWD/input/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img"
+          uuid="$(dumpe2fs -h "$img" 2>/dev/null | awk '/^Filesystem UUID:/ {print $3}')"
+          test -n "$uuid"
+          test "$(stage/u20-probe-host "$uuid" --image "$img")" = "$img"
+          test "$(qemu-aarch64-static stage/u20ramdisk/bin/u8-rootfs-probe "$uuid" --image "$img")" = "$img"
+          if stage/u20-probe-host 00000000-0000-0000-0000-000000000000 --image "$img"; then
+            echo '::error::Invalid UUID accepted by offline read-only probe'
+            exit 1
+          fi
+          (cd stage/u20ramdisk && find . -print0 | LC_ALL=C sort -z \
+            | cpio --null -o --format=newc --quiet) \
+            | lz4 -l -z -c > output/u20/u20-REBUILT-ARM64-GUARDED-INITRAMFS-NOT_FLASHABLE.cpio.lz4
+          test -s output/u20/u20-REBUILT-ARM64-GUARDED-INITRAMFS-NOT_FLASHABLE.cpio.lz4
+          rm -f output/u20/u8-old-pinned.cpio
+
       - name: Audit real ext4, initramfs scripts and pinned GKI separately
         shell: bash
         run: |
@@ -77,6 +117,7 @@ jobs:
           python3 scripts/u20_offline_handoff_audit.py \
             --rootfs input/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img \
             --ramdisk input/u8/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 \
+            --rebuilt output/u20/u20-REBUILT-ARM64-GUARDED-INITRAMFS-NOT_FLASHABLE.cpio.lz4 \
             --gki input/u18/research-UNVERIFIED/GKI-6.1.157-r9-Image-DO-NOT-FLASH \
             --u18report input/u18/U18_CP2A_GKI_REPORT.json \
             --u19 input/u19/U19_VENDOR_ABI_REPORT.json \
@@ -87,7 +128,7 @@ jobs:
           cat output/u20/U20_OFFLINE_INTEGRATION.md >> "$GITHUB_STEP_SUMMARY"
           df -h /
 
-      - name: Preserve proof and SHA256 only (NO 2GB image repack, NO boot.img)
+      - name: Preserve proof + corrected standalone ramdisk only (NO boot.img / 2GB copy)
         if: always()
         uses: actions/upload-artifact@v4
         with:
