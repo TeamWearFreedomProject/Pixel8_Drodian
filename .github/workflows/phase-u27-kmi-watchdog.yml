@@ -1,0 +1,73 @@
+name: U27 Pixel8 exact-source watchdog VLA and Bazel KMI provider audit (NO FLASH)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u27-kmi-watchdog.yml
+      - scripts/u27_kmi_watchdog_audit.py
+      - PHASE_U27.md
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: u27-kmi-watchdog-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  source-watchdog-audit:
+    name: Cross-check U25 actual compile errors against pinned Google watchdog source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download real failed U25 compiler outputs + exact source patch manifest
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38112313451
+          name: u25-SHIBA-SOURCE-GKI-AUDIT-NOT-FLASHABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/u25
+      - name: Download verified U24 provider and source identity report
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38112137454
+          name: u24-COMMON-PROVIDER-DWC3-PROVENANCE-NOTFLASH-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/u24
+      - name: Download Google official pinned Bazelrc and Zuma watchdog source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p source/u27 output/u27
+          curl -fsSL --retry 4 \
+            'https://android.googlesource.com/kernel/devices/google/common/+/397babd94c06783d8430c838475955f0b6ff63c2/device.bazelrc?format=TEXT' \
+            | base64 -d > source/u27/device.bazelrc
+          curl -fsSL --retry 4 \
+            'https://android.googlesource.com/kernel/google-modules/soc/gs/+/057ab18a9cc0e318538b419eafc565a7fbe1d320/drivers/watchdog/s3c2410_wdt.c?format=TEXT' \
+            | base64 -d > source/u27/s3c2410_wdt.c
+          test -s source/u27/device.bazelrc
+          test -s source/u27/s3c2410_wdt.c
+          sha256sum source/u27/* > output/u27/U27_GOOGLE_SOURCE_SHA256.txt
+      - name: Verify U25 real VLA source and KMI provider evidence, strict gate DENY
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile scripts/u27_kmi_watchdog_audit.py
+          python3 scripts/u27_kmi_watchdog_audit.py \
+            --u25 evidence/u25 \
+            --u24 evidence/u24 \
+            --watchdog source/u27/s3c2410_wdt.c \
+            --bazelrc source/u27/device.bazelrc \
+            --out output/u27
+          python3 -m json.tool output/u27/U27_KMI_WATCHDOG_DIAGNOSIS.json >/dev/null
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u27/U27_KMI_WATCHDOG_DIAGNOSIS.md
+          cat output/u27/U27_KMI_WATCHDOG_DIAGNOSIS.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve reproducible source audit not kernels or flashable images
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u27-GKI-KMI-WATCHDOG-SOURCE-AUDIT-NOT-FLASH-${{ github.run_number }}
+          path: output/u27/
+          retention-days: 28
+          if-no-files-found: warn
