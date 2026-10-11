@@ -1,0 +1,97 @@
+name: U20 Ubuntu ARM64 ext4 + guarded initramfs + CP2A GKI offline assembly audit
+
+on:
+  pull_request:
+    paths:
+      - PHASE_U20.md
+      - scripts/u20_offline_handoff_audit.py
+      - .github/workflows/phase-u20-offline-handoff.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u20-offline-ubuntu-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  offline-handoff-audit:
+    name: Verify Ubuntu 26.04 ext4, gated initramfs and GKI WITHOUT FLASHING
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install read-only ext4 and archive tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends e2fsprogs lz4 cpio
+          python3 -m py_compile scripts/u20_offline_handoff_audit.py
+          mkdir -p input/u6 input/u8 input/u18 input/u19 output/u20
+          df -h /
+
+      - name: Download existing U6 Ubuntu 26.04 ARM64 standalone ext4 image (not userdata firmware)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38047914957
+          name: shiba-u6-ubuntu-ext4-NOT_BOOTABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u6
+
+      - name: Download previous U8 explicitly guarded first-stage initramfs (NOT init_boot.img)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38052743722
+          name: shiba-u8-initramfs-RESEARCH-DO_NOT_FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u8
+
+      - name: Download U18 exact CP2A source GKI AArch64 research Image
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38101661379
+          name: u18-CP2A-GKI-RESEARCH-NOT-FLASHABLE-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u18
+
+      - name: Download U19 binary compatibility audit, keeping flash DENY gate
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38103774760
+          name: u19-shiba-vendor-KMI-AUDIT-NOT-BOOTABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input/u19
+
+      - name: Audit real ext4, initramfs scripts and pinned GKI separately
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u20_offline_handoff_audit.py \
+            --rootfs input/u6/ubuntu-26.04-shiba-arm64-rootfs-DATA_ONLY-NOT_BOOTABLE.img \
+            --ramdisk input/u8/u8-ubuntu-rootfs-handoff-UNVERIFIED-INITRAMFS_ONLY.cpio.lz4 \
+            --gki input/u18/research-UNVERIFIED/GKI-6.1.157-r9-Image-DO-NOT-FLASH \
+            --u18report input/u18/U18_CP2A_GKI_REPORT.json \
+            --u19 input/u19/U19_VENDOR_ABI_REPORT.json \
+            --sourceinit scripts/u8_init \
+            --out output/u20
+          python3 -m json.tool output/u20/U20_OFFLINE_INTEGRATION.json >/dev/null
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u20/U20_OFFLINE_INTEGRATION.md
+          cat output/u20/U20_OFFLINE_INTEGRATION.md >> "$GITHUB_STEP_SUMMARY"
+          df -h /
+
+      - name: Preserve proof and SHA256 only (NO 2GB image repack, NO boot.img)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u20-Ubuntu-GKI-OFFLINE-VERIFIED-DO-NOT-FLASH-${{ github.run_number }}
+          path: output/u20/
+          retention-days: 28
+          if-no-files-found: warn
