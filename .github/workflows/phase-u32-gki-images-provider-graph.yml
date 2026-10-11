@@ -1,0 +1,92 @@
+name: U32 trace stale 6.1.124 GKI images provider (NO FLASH)
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u32-gki-images-provider-graph.yml
+      - scripts/u32_gki_images_provider_trace.py
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: u32-images-graph-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  diagnose-archive:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare official Google kernel repository (cloud-only)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/bin" output/u32-images
+          python3 -m py_compile scripts/u30_source_alias_experiment.py scripts/u32_gki_images_provider_trace.py
+          curl -fsSL --retry 4 https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+          git config --global user.name "U32 source-only graph analysis"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Sync pinned public shusky and source GKI r9
+        run: |
+          set -euxo pipefail
+          mkdir -p shusky-src
+          cd shusky-src
+          "$HOME/bin/repo" init --depth=1 -u https://android.googlesource.com/kernel/manifest -b android-gs-shusky-6.1-android16
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle > "$GITHUB_WORKSPACE/output/u32-images/U32_SYNC_FULL.log" 2>&1
+          git -C aosp fetch --depth=1 https://android.googlesource.com/kernel/common refs/tags/android14-6.1-2025-12_r9
+          git -C aosp checkout --detach bd23337e42e794964a89f47596daf1209a25ee1a
+          test "$(git -C aosp rev-parse HEAD)" = bd23337e42e794964a89f47596daf1209a25ee1a
+          test "$(git -C private/devices/google/common rev-parse HEAD)" = 397babd94c06783d8430c838475955f0b6ff63c2
+          "$HOME/bin/repo" manifest -r -o "$GITHUB_WORKSPACE/output/u32-images/U32_GOOGLE_SOURCE_MANIFEST.xml"
+      - name: Restore U30 source GKI kernel alias but leave the separate images alias unchanged
+        run: |
+          set -euxo pipefail
+          python3 scripts/u30_source_alias_experiment.py patch --src shusky-src --out output/u32-images
+      - name: Trace old downloaded GKI image dependency before changing it
+        shell: bash
+        run: |
+          set +e
+          cd shusky-src
+          ./tools/bazel cquery --config=stamp --config=shusky --config=use_source_tree_aosp --use_prebuilt_gki=false --use_signed_prebuilts=false --download_prebuilt_gki_fips140=false "somepath(//private/devices/google/common:kernel_gki_modules,//aosp:kernel_aarch64_images_download_or_build)" --output=label_kind > "$GITHUB_WORKSPACE/output/u32-images/U32_PRE_OLD_IMAGES_CQUERY.txt" 2>&1
+          rc=$?
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u32-images/U32_PRE_OLD_IMAGES_EXIT.txt"
+          tail -n 25 "$GITHUB_WORKSPACE/output/u32-images/U32_PRE_OLD_IMAGES_CQUERY.txt"
+      - name: Apply guarded 4KiB images source alias in disposable CI only
+        run: |
+          set -euxo pipefail
+          python3 scripts/u32_gki_images_provider_trace.py patch --src shusky-src --out output/u32-images
+      - name: Verify old/new images provider dependency paths (no compilation)
+        shell: bash
+        run: |
+          set +e
+          cd shusky-src
+          probe() {
+            name="$1"
+            path="$2"
+            ./tools/bazel cquery --config=stamp --config=shusky --config=use_source_tree_aosp --use_prebuilt_gki=false --use_signed_prebuilts=false --download_prebuilt_gki_fips140=false "$path" --output=label_kind > "$GITHUB_WORKSPACE/output/u32-images/U32_$name"_CQUERY.txt 2>&1
+            echo "$?" > "$GITHUB_WORKSPACE/output/u32-images/U32_$name"_EXIT.txt
+            tail -n 20 "$GITHUB_WORKSPACE/output/u32-images/U32_$name"_CQUERY.txt
+          }
+          probe POST_OLD_IMAGES "somepath(//private/devices/google/common:kernel_gki_modules,//aosp:kernel_aarch64_images_download_or_build)"
+          probe POST_SOURCE_IMAGES "somepath(//private/devices/google/common:kernel_gki_modules,//aosp:kernel_aarch64_images)"
+          probe POST_SOURCE_KERNEL "somepath(//private/devices/google/common:kernel_gki_modules,//aosp:kernel_aarch64)"
+          cd "$GITHUB_WORKSPACE"
+          python3 scripts/u32_gki_images_provider_trace.py verify --out output/u32-images
+          cat output/u32-images/U32_IMAGES_PROVIDER_TRACE.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep only bounded dependency reports
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if test -s output/u32-images/U32_SYNC_FULL.log; then
+            tail -n 150 output/u32-images/U32_SYNC_FULL.log > output/u32-images/U32_SYNC_TAIL.log
+            rm -f output/u32-images/U32_SYNC_FULL.log
+          fi
+          echo 'Only Bazel queries; old 58 modules NOT FIXED. No firmware output. REAL DEVICE FLASH GATE: DENY.' > output/u32-images/U32_NO_DEVICE_GATE.txt
+      - name: Upload text, hashes and source diffs ONLY
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u32-GKI-IMAGE-PROVIDER-QUERY-RESEARCH-NO-FLASH-${{ github.run_number }}
+          path: output/u32-images/
+          retention-days: 21
+          if-no-files-found: warn
