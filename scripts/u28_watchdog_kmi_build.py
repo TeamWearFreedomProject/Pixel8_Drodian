@@ -67,6 +67,52 @@ def patch(src, report, out):
     (out/"U28_WATCHDOG_PATCH.json").write_text(json.dumps(info,indent=2)+"\n")
     print(json.dumps(info,indent=2))
 
+def patch_bms_legacy_max(src, out):
+    """Rename ONLY the local legacy MAX macro, preserving battery code.
+
+    The modern GKI provides MAX() from include/linux/minmax.h. The old BMS
+    module declares another MAX() with overlapping semantics; redefining it
+    is a fatal -Werror. Do not change driver logic or GKI headers.
+    """
+    bmsroot=src/"private/google-modules/bms"
+    battery=bmsroot/"google_dual_batt_gauge.c"
+    if not battery.is_file():
+        abort("pinned Google BMS source file missing")
+    code=battery.read_text()
+    old_define=re.compile(
+        r"(?m)^([ \t]*#[ \t]*define[ \t]+)MAX([ \t]*\([ \t]*x[ \t]*,[ \t]*y[ \t]*\)[ \t]*"
+        r"\(\(x\)[ \t]*<[ \t]*\(y\)[ \t]*\?[ \t]*\(y\)[ \t]*:[ \t]*\(x\)\)[ \t]*)$")
+    if len(old_define.findall(code))!=1:
+        abort("BMS MAX definition does not match source-verified two-input comparison")
+    upstream=(src/"aosp/include/linux/minmax.h").read_text()
+    if not re.search(r"(?m)^[ \t]*#[ \t]*define[ \t]+MAX[ \t]*\([ \t]*a[ \t]*,[ \t]*b[ \t]*\)", upstream):
+        abort("modern GKI MAX(a,b) unexpectedly missing")
+    prior_sha=sha(battery)
+    old_uses=len(re.findall(r"\bMAX[ \t]*\(",code))
+    new_name="GBMS_DUAL_BATT_LOCAL_MAX"
+    revised,n=re.subn(r"\bMAX(?=[ \t]*\()",new_name,code)
+    if old_uses<1 or n!=old_uses:
+        abort("BMS macro usage/definition count unexpected")
+    if re.search(r"\bMAX[ \t]*\(",revised) or revised.count("#define "+new_name)!=1:
+        abort("BMS legacy MAX declaration not fully isolated")
+    battery.write_text(revised)
+    evidence={
+        "status":"BMS_LOCAL_MACRO_RENAMED_IN_DISPOSABLE_CI_ONLY",
+        "path":"private/google-modules/bms/google_dual_batt_gauge.c",
+        "official_source_before_sha256":prior_sha,
+        "patched_source_sha256":sha(battery),
+        "original_legacy_macro_definition_count":1,
+        "local_macro_replacements":n,
+        "GKI_linux_minmax_header_unchanged":True,
+        "battery_function_logic_changed":False,
+        "battery_module_disabled":False,
+        "watchdog_and_internal_USB_kept":True,
+        "real_device_flash_gate":"DENY",
+    }
+    (out/"U28_BMS_MAX_MACRO_PATCH.json").write_text(json.dumps(evidence,indent=2)+"\n")
+    print(json.dumps(evidence,indent=2))
+
+
 def scan_version(image):
     if not image.is_file():return None
     before=b""
@@ -101,6 +147,7 @@ def audit(src, out, rc):
             "6.1.124-android14-11" in t),
         "watchdog_VLA_reappeared":("variable length array used" in t and "s3c2410_wdt" in t),
         "DWC3_macro_collision_reappeared":("'DWC3_LLUCTL' macro redefined" in t),
+        "BMS_legacy_MAX_macro_collision_reappeared":("'MAX' macro redefined" in t),
         "RTL8150_usb_helper_error_reappeared":('usb_check_int_endpoints' in t and 'undefined' in t),
     }
     succeeded=rc==0 and image.is_file() and version is not None
@@ -153,6 +200,8 @@ def main():
         if name=="patch":p.add_argument("--u27",type=Path,required=True)
         else:p.add_argument("--exit-code",type=int,required=True)
     a=ap.parse_args()
-    if a.op=="patch":patch(a.src,a.u27,a.out)
+    if a.op=="patch":
+        patch(a.src,a.u27,a.out)
+        patch_bms_legacy_max(a.src,a.out)
     else:audit(a.src,a.out,a.exit_code)
 if __name__=="__main__":main()
