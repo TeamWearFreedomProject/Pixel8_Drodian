@@ -1,0 +1,575 @@
+name: U37 publish checksum-verified research Pixel8 and Ubuntu Base images as Actions Artifacts (NO FLASH)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u37-export-research-images.yml
+      - scripts/u37_export_research_artifacts.py
+      - PHASE_U37.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u37-export-research-images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SHUSKY_BRANCH: android-gs-shusky-6.1-android16
+  GKI_TAG: android14-6.1-2025-12_r9
+  GKI_SHA40: bd23337e42e794964a89f47596daf1209a25ee1a
+
+jobs:
+  source-gki-then-guarded-shusky:
+    name: Rebuild U35 success and publish NOT-FLASHABLE experimental image artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 165
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read verified U31 research 180-module baseline (metadata only)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38147914456
+          name: u31-GKI-SHIBA-OFFLINE-ABI-BOARD-REPORT-NOT-FLASHABLE-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/u31
+
+      - name: Read immutable U30 successful 6.1.157 full dist audit (no binary)
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38144121200
+          name: u30-STAGED-SOURCE-GKI-SHUSKY-NOT-FLASHABLE-6
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/u30
+
+      - name: Prepare isolated runner and source-only evidence directory
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/bin" output/u30-build output/u31 output/u32 output/u33 output/u35 u35
+          python3 -m py_compile \
+            scripts/u30_source_alias_experiment.py \
+            scripts/u30_staged_build_gate.py \
+            scripts/u30_fix_rtl8150_defconfig.py \
+            scripts/u31_offline_abi_audit.py \
+            scripts/u32_full_module_crc_audit.py \
+            scripts/u32_legacy_module_origin.py \
+            scripts/u32_gki_images_provider_trace.py \
+            scripts/u35_verify_android_v4_lab.py \
+            scripts/u37_export_research_artifacts.py \
+            scripts/u28_watchdog_kmi_build.py \
+            scripts/u25_source_only_shusky.py
+          df -h /
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/.ghcup || true
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates cpio curl dwarves file flex \
+            git kmod binutils e2fsprogs libelf-dev libssl-dev lz4 python3 rsync unzip xz-utils zip zstd
+          curl -fsSL --retry 4 \
+            https://storage.googleapis.com/git-repo-downloads/repo \
+            -o "$HOME/bin/repo"
+          chmod 755 "$HOME/bin/repo"
+          "$HOME/bin/repo" version
+          git config --global user.name "U30 isolated build research"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get prior independently successful U27 watchdog source provenance
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38113084815
+          name: u27-GKI-KMI-WATCHDOG-SOURCE-AUDIT-NOT-FLASH-1
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: evidence/u27
+
+      - name: Sync Google official shusky tree and pin exact 6.1.157 GKI source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p shusky-src
+          cd shusky-src
+          "$HOME/bin/repo" init --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "$SHUSKY_BRANCH"
+          "$HOME/bin/repo" sync -c -j4 --no-tags --no-clone-bundle \
+            2>&1 | tee "$GITHUB_WORKSPACE/output/u30-build/U30_SOURCE_SYNC_FULL.log"
+          git -C aosp fetch --depth=1 \
+            https://android.googlesource.com/kernel/common "refs/tags/$GKI_TAG"
+          git -C aosp checkout --detach "$GKI_SHA40"
+          test "$(git -C aosp rev-parse HEAD)" = "$GKI_SHA40"
+          "$HOME/bin/repo" manifest -r \
+            -o "$GITHUB_WORKSPACE/output/u30-build/U30_GOOGLE_SOURCES.xml"
+          df -h /
+
+      - name: Apply previously reviewed vendor source adaptations and U30 source GKI alias
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s evidence/u27/U27_KMI_WATCHDOG_DIAGNOSIS.json
+          grep -Fq 'build --use_prebuilt_gki=true' \
+            shusky-src/private/devices/google/common/device.bazelrc
+          python3 scripts/u25_source_only_shusky.py patch \
+            --source-dir shusky-src --out output/u30-build
+          # U25's approved optional RTL8150 exclusion removes the Kconfig
+          # symbol; reconcile EXACTLY its stale gki_defconfig request before
+          # a native source-kernel build runs the strict savedefconfig gate.
+          python3 scripts/u30_fix_rtl8150_defconfig.py \
+            --src shusky-src --out output/u30-build
+          test -s output/u30-build/U30_OPTIONAL_RTL8150_CONFIG_DIFF.txt
+          test -s output/u30-build/U30_OPTIONAL_RTL8150_GKI_MODULE_OUTS_DIFF.txt
+          python3 scripts/u28_watchdog_kmi_build.py patch \
+            --src shusky-src --u27 evidence/u27/U27_KMI_WATCHDOG_DIAGNOSIS.json \
+            --out output/u30-build
+          python3 scripts/u30_source_alias_experiment.py patch \
+            --src shusky-src --out output/u30-build
+          test -s output/u30-build/U30_RESEARCH_ONLY_COMMON_GKI_ALIAS_DIFF.txt
+          git -C shusky-src/private/devices/google/common diff \
+            > output/u30-build/U30_SOURCE_GKI_COMMON_DIFF.txt
+          test -s output/u30-build/U30_SOURCE_GKI_COMMON_DIFF.txt
+          df -h /
+
+      - name: Confirm U30 shusky kernel reaches source r9 GKI before expensive compilation
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd shusky-src
+          set +e
+          ./tools/bazel cquery \
+            --config=stamp --config=shusky --config=use_source_tree_aosp \
+            --use_prebuilt_gki=false --use_signed_prebuilts=false \
+            --download_prebuilt_gki_fips140=false \
+            "somepath(//private/devices/google/shusky:kernel,//aosp:kernel_aarch64)" \
+            --output=label_kind \
+            > "$GITHUB_WORKSPACE/output/u30-build/U30_SOURCE_ALIAS_PATH_QUERY.txt" 2>&1
+          rc=$?
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u30-build/U30_SOURCE_ALIAS_PATH_EXIT.txt"
+          tail -n 25 "$GITHUB_WORKSPACE/output/u30-build/U30_SOURCE_ALIAS_PATH_QUERY.txt"
+          test "$rc" -eq 0
+          cd "$GITHUB_WORKSPACE"
+          python3 scripts/u30_source_alias_experiment.py verify \
+            --out output/u30-build
+
+      - name: U33 inspect PRE-patch old GKI system_dlkm images provider
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          set +e
+          ./tools/bazel cquery \
+            --config=stamp --config=shusky --config=use_source_tree_aosp \
+            --use_prebuilt_gki=false --use_signed_prebuilts=false \
+            --download_prebuilt_gki_fips140=false \
+            "somepath(//private/devices/google/common:kernel_gki_modules,//aosp:kernel_aarch64_images_download_or_build)" \
+            --output=label_kind \
+            > "$GITHUB_WORKSPACE/output/u33/U32_PRE_OLD_IMAGES_CQUERY.txt" 2>&1
+          rc=$?
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u33/U32_PRE_OLD_IMAGES_EXIT.txt"
+          tail -n 25 "$GITHUB_WORKSPACE/output/u33/U32_PRE_OLD_IMAGES_CQUERY.txt"
+          test "$rc" -eq 0
+
+      - name: U33 guard-fix ONLY the separate 4KiB GKI images alias in disposable sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u32_gki_images_provider_trace.py patch \
+            --src shusky-src --out output/u33
+          test -s output/u33/U32_CI_ONLY_GKI_IMAGES_SOURCE_ALIAS_DIFF.txt
+
+      - name: U33 verify actual configured source-images chain and no old GKI images provider
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          cfg=(
+            --config=stamp --config=shusky --config=use_source_tree_aosp
+            --use_prebuilt_gki=false --use_signed_prebuilts=false
+            --download_prebuilt_gki_fips140=false
+          )
+          probe() {
+            local name="$1" target="$2"
+            ./tools/bazel cquery "${cfg[@]}" "$target" --output=label_kind \
+              > "$GITHUB_WORKSPACE/output/u33/U32_${name}_CQUERY.txt" 2>&1
+            local rc=$?
+            printf '%s\n' "$rc" > "$GITHUB_WORKSPACE/output/u33/U32_${name}_EXIT.txt"
+            tail -n 20 "$GITHUB_WORKSPACE/output/u33/U32_${name}_CQUERY.txt"
+          }
+          set +e
+          probe POST_OLD_IMAGES \
+            "somepath(//private/devices/google/common:kernel_gki_modules,//aosp:kernel_aarch64_images_download_or_build)"
+          probe POST_SOURCE_IMAGES \
+            "somepath(//private/devices/google/common:kernel_gki_modules,//aosp:kernel_aarch64_images)"
+          probe POST_SOURCE_KERNEL \
+            "somepath(//private/devices/google/common:kernel_gki_modules,//aosp:kernel_aarch64)"
+          ./tools/bazel cquery "${cfg[@]}" \
+            "somepath(//private/devices/google/shusky:zuma_shusky_dist,//aosp:kernel_aarch64_images_download_or_build)" \
+            --output=label_kind \
+            > "$GITHUB_WORKSPACE/output/u33/U33_DIST_OLD_IMAGES_CQUERY.txt" 2>&1
+          rc=$?
+          printf '%s\n' "$rc" > "$GITHUB_WORKSPACE/output/u33/U33_DIST_OLD_IMAGES_EXIT.txt"
+          cd "$GITHUB_WORKSPACE"
+          set -e
+          python3 scripts/u32_gki_images_provider_trace.py verify --out output/u33
+          test "$(cat output/u33/U33_DIST_OLD_IMAGES_EXIT.txt)" = 0
+          grep -Fq 'INFO: Empty query results' \
+            output/u33/U33_DIST_OLD_IMAGES_CQUERY.txt
+          cat output/u33/U32_IMAGES_PROVIDER_TRACE.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: STAGE 1 compile actual 6.1.157 GKI kernel source target (no phone)
+        id: source
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          set +e
+          ./tools/bazel build --jobs=2 \
+            --config=stamp --config=shusky --config=use_source_tree_aosp \
+            --use_prebuilt_gki=false --use_signed_prebuilts=false \
+            --download_prebuilt_gki_fips140=false \
+            //aosp:kernel_aarch64 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u30-build/U30_KERNEL_SOURCE_BUILD_FULL.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u30-build/U30_KERNEL_SOURCE_EXIT.txt"
+          echo "U30 direct GKI source build exit code: $rc"
+          exit "$rc"
+
+      - name: STAGE 1 gate actual source Image release and SHA256 before full vendor build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u30_staged_build_gate.py source \
+            --src shusky-src --out output/u30-build \
+            --rc-file output/u30-build/U30_KERNEL_SOURCE_EXIT.txt
+          test -s output/u30-build/U30_SOURCE_KERNEL_PASS.txt
+          cat output/u30-build/U30_SOURCE_KERNEL_AUDIT.json >> "$GITHUB_STEP_SUMMARY"
+          df -h /
+
+      - name: STAGE 2 inspect full shusky dist graph for stale downloaded GKI
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          cfg=(
+            --config=stamp --config=shusky --config=use_source_tree_aosp
+            --use_prebuilt_gki=false --use_signed_prebuilts=false
+            --download_prebuilt_gki_fips140=false
+          )
+          set +e
+          ./tools/bazel cquery "${cfg[@]}" \
+            "somepath(//private/devices/google/shusky:zuma_shusky_dist,//aosp:kernel_aarch64)" \
+            --output=label_kind \
+            > "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_SOURCE_PATH_CQUERY.txt" 2>&1
+          rc1=$?
+          ./tools/bazel cquery "${cfg[@]}" \
+            "somepath(//private/devices/google/shusky:zuma_shusky_dist,//aosp:kernel_aarch64_download_or_build)" \
+            --output=label_kind \
+            > "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_OLD_PATH_CQUERY.txt" 2>&1
+          rc2=$?
+          set -e
+          echo "$rc1" > "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_SOURCE_PATH_EXIT.txt"
+          echo "$rc2" > "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_OLD_PATH_EXIT.txt"
+          tail -n 20 "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_SOURCE_PATH_CQUERY.txt"
+          tail -n 20 "$GITHUB_WORKSPACE/output/u30-build/U30_DIST_TO_OLD_PATH_CQUERY.txt"
+          cd "$GITHUB_WORKSPACE"
+          python3 scripts/u30_staged_build_gate.py graph --out output/u30-build
+
+      - name: STAGE 3 shusky vendor full build ONLY after actual source and graph gates
+        id: vendor
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd shusky-src
+          set +e
+          ./tools/bazel run --jobs=2 \
+            --config=stamp --config=shusky --config=use_source_tree_aosp \
+            --use_prebuilt_gki=false --use_signed_prebuilts=false \
+            --download_prebuilt_gki_fips140=false \
+            //private/devices/google/shusky:zuma_shusky_dist 2>&1 \
+            | tee "$GITHUB_WORKSPACE/output/u30-build/U30_VENDOR_FULL_BUILD_FULL.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u30-build/U30_VENDOR_BUILD_EXIT.txt"
+          echo "U30 shusky vendor full build exit: $rc"
+          exit "$rc"
+
+      - name: STAGE 3 gate actual compiled full Image release (not flashable)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 scripts/u30_staged_build_gate.py full \
+            --src shusky-src --out output/u30-build \
+            --rc-file output/u30-build/U30_VENDOR_BUILD_EXIT.txt
+          cat output/u30-build/U30_FULL_DIST_AUDIT.json >> "$GITHUB_STEP_SUMMARY"
+          echo "IMPORTANT: Compile is NOT phone ABI/rollback safety verification" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: U31 offline audit GKI Module.symvers vs emitted modules and DTBO inventory
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s evidence/u30/U30_FULL_DIST_AUDIT.json
+          test -s output/u30-build/U30_SOURCE_KERNEL_PASS.txt
+          test -s output/u30-build/U30_PROVIDER_PASS.txt
+          test "$(cat output/u30-build/U30_VENDOR_BUILD_EXIT.txt)" = 0
+          python3 scripts/u31_offline_abi_audit.py \
+            --src shusky-src --out output/u31 \
+            --u30 evidence/u30/U30_FULL_DIST_AUDIT.json
+          test -s output/u31/U31_OFFLINE_ABI_BOARD_AUDIT.json
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' \
+            output/u31/U31_OFFLINE_ABI_BOARD_AUDIT.md
+          cat output/u31/U31_OFFLINE_ABI_BOARD_AUDIT.md >> "$GITHUB_STEP_SUMMARY"
+      - name: U33 audit every discovered .ko vermagic and CRC against pinned source GKI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s output/u31/U31_OFFLINE_ABI_BOARD_AUDIT.json
+          test "$(cat output/u30-build/U30_VENDOR_BUILD_EXIT.txt)" = 0
+          python3 scripts/u32_full_module_crc_audit.py \
+            --src shusky-src --out output/u32 \
+            --u31-evidence evidence/u31
+          test -s output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.json
+          test -s output/u32/U32_STOCK_CP2A_REFERENCE_GAPS.json
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' \
+            output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.md
+          cat output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.md >> "$GITHUB_STEP_SUMMARY"
+
+
+      - name: U33 preserve strict evidence of old 6.1.124 file paths on failure (if any)
+        if: always()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if test -s output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.json; then
+            python3 scripts/u32_legacy_module_origin.py \
+              --src shusky-src --out output/u33 \
+              --previous output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.json
+            test -s output/u33/U32_OLD_GKI_MODULE_ORIGINS.json
+            cat output/u33/U32_OLD_GKI_MODULE_ORIGINS.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '%s\n' \
+              'U33 missing module audit JSON: kernel/image build failed; NO-GO.' \
+              > output/u33/U33_MODULE_ORIGINS_NOT_AVAILABLE.txt
+          fi
+
+      - name: U35 fetch Canonical Ubuntu Base 26.04.1 arm64 and Android upstream mkbootimg sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p u35/rootfs u35/tools output/u35
+          base=https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release
+          archive=ubuntu-base-26.04.1-base-arm64.tar.gz
+          curl -fL --retry 4 --connect-timeout 30 "$base/SHA256SUMS" -o u35/SHA256SUMS
+          grep -E '[[:space:]]\*?ubuntu-base-26[.]04[.]1-base-arm64[.]tar[.]gz$' \
+            u35/SHA256SUMS > u35/BASE_SHA256SUMS_ONLY
+          test "$(wc -l < u35/BASE_SHA256SUMS_ONLY)" -eq 1
+          curl -fL --retry 4 --connect-timeout 30 --max-time 1000 \
+            "$base/$archive" -o "u35/$archive"
+          ( cd u35 && sha256sum --check BASE_SHA256SUMS_ONLY )
+          sha256sum "u35/$archive" > output/u35/U35_CANONICAL_UBUNTU_BASE_SHA256.txt
+          tar -xzf "u35/$archive" --no-same-owner -C u35/rootfs
+          grep -Eq '^VERSION_ID="?26[.]04' u35/rootfs/etc/os-release
+          test -e u35/rootfs/bin/sh || test -e u35/rootfs/usr/bin/sh
+          git clone --depth=1 --branch android-16.0.0_r1 \
+            https://android.googlesource.com/platform/system/tools/mkbootimg \
+            u35/tools/mkbootimg
+          test -s u35/tools/mkbootimg/mkbootimg.py
+          git -C u35/tools/mkbootimg rev-parse HEAD \
+            > output/u35/U35_AOSP_MKBOOTIMG_PIN.txt
+          df -h /
+
+      - name: U35 fetch arm64 BusyBox-static from Ubuntu 26.04 package repository
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo dpkg --add-architecture arm64
+          printf '%s\n' \
+            'deb [arch=arm64 signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://ports.ubuntu.com/ubuntu-ports resolute main universe' \
+            > u35/ubuntu-arm64.list
+          sudo apt-get \
+            -o Dir::Etc::sourcelist="$GITHUB_WORKSPACE/u35/ubuntu-arm64.list" \
+            -o Dir::Etc::sourceparts=- update -qq
+          mkdir -p u35/pkgs u35/busybox-pkg u35/initramfs/bin u35/initramfs/dev u35/initramfs/proc u35/initramfs/sys u35/initramfs/run u35/initramfs/tmp u35/initramfs/mnt
+          cd u35/pkgs
+          # Use the exact same authenticated Resolute ARM64 source list for
+          # package resolution and download; Ubuntu 24.04 runner defaults
+          # otherwise cannot see packages indexed in the custom source list.
+          apt-cache \
+            -o Dir::Etc::sourcelist="$GITHUB_WORKSPACE/u35/ubuntu-arm64.list" \
+            -o Dir::Etc::sourceparts=- \
+            policy busybox-static:arm64 \
+            | tee "$GITHUB_WORKSPACE/output/u35/U35_UBUNTU_ARM64_BUSYBOX_APT_POLICY.txt"
+          apt-get \
+            -o Dir::Etc::sourcelist="$GITHUB_WORKSPACE/u35/ubuntu-arm64.list" \
+            -o Dir::Etc::sourceparts=- \
+            download busybox-static:arm64
+          deb="$(find . -maxdepth 1 -name 'busybox-static_*_arm64.deb' -type f)"
+          test -f "$deb"
+          test "$(dpkg-deb -f "$deb" Architecture)" = arm64
+          sha256sum "$deb" > "$GITHUB_WORKSPACE/output/u35/U35_BUSYBOX_STATIC_DEB_SHA256.txt"
+          dpkg-deb -x "$deb" ../busybox-pkg
+          binary="$(find ../busybox-pkg -type f -name busybox | head -n 1)"
+          test -f "$binary"
+          install -m 0755 "$binary" ../initramfs/bin/busybox
+          cd "$GITHUB_WORKSPACE"
+          install -m 0755 scripts/u35_stage0_init.sh u35/initramfs/init
+          ln -sf busybox u35/initramfs/bin/sh
+          readelf -h u35/initramfs/bin/busybox | grep -F 'AArch64'
+
+      - name: U35 simultaneously build arm64 stage0 initramfs and lab Ubuntu Base ext4 filesystem
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ( cd u35/initramfs && find . -print0 | cpio --quiet --null --format=newc --owner=0:0 -o ) \
+            | gzip -n -9 > u35/U35-ARM64-STAGE0-initramfs.cpio.gz
+          test -s u35/U35-ARM64-STAGE0-initramfs.cpio.gz
+          gzip -dc u35/U35-ARM64-STAGE0-initramfs.cpio.gz \
+            | cpio --quiet -t > output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
+          # GNU cpio normalizes leading "./" away on archive listing;
+          # the exact previously uploaded Run #4 member list contains
+          # "init" and "bin/busybox", not "./init" and "./bin/busybox".
+          grep -Fxq 'init' output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
+          grep -Fxq 'bin/busybox' output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
+          grep -Fxq 'bin/sh' output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
+          truncate -s 1024M u35/ubuntu-U35-LAB-NOT-USERDATA.img
+          mkfs.ext4 -F -q -L U35_UBUNTU_LAB \
+            -d u35/rootfs u35/ubuntu-U35-LAB-NOT-USERDATA.img
+          tune2fs -l u35/ubuntu-U35-LAB-NOT-USERDATA.img \
+            | grep -E 'Filesystem volume name|Block size|Block count|Filesystem state' \
+            > output/u35/U35_ROOTFS_EXT4_STRUCTURE.txt
+          test -s output/u35/U35_ROOTFS_EXT4_STRUCTURE.txt
+
+      - name: U35 create Android v4 boot and init_boot LAB images and validate exact components
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.json
+          test -s output/u33/U32_OLD_GKI_MODULE_ORIGINS.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          a=json.loads(Path("output/u32/U32_COMPLETE_RESEARCH_KMI_CRC.json").read_text())
+          b=json.loads(Path("output/u33/U32_OLD_GKI_MODULE_ORIGINS.json").read_text())
+          assert a["phase"]=="U32"
+          assert a["status"]=="U32_ALL_DISCOVERED_RESEARCH_MODULES_AUDITED_NO_BASE_GKI_CRC_CONFLICT"
+          assert a["all_discovered_content_groups_examined"] and a["module_vermagic_bad_count"]==0
+          assert a["research_GKI_export_CRC_disagreement_total"]==0
+          assert b["old_6_1_124_distinct_groups"]==0
+          assert a["real_device_flash_gate"]=="DENY"
+          PY
+          raw=shusky-src/out/shusky/dist/Image
+          test -s "$raw"
+          # The verified source Image always comes from the actual full
+          # shusky dist. If Bazel has not exported Image.lz4 to the dist,
+          # explicitly compress THAT verified source Image for the lab.
+          packed=shusky-src/out/shusky/dist/Image.lz4
+          if test -s "$packed"; then
+            echo 'Source: verified shusky dist Image.lz4' > output/u35/U35_GKI_COMPRESSED_PROVENANCE.txt
+          else
+            packed=u35/U35_FROM_VERIFIED_SOURCE_GKI_Image.lz4
+            lz4 -9 -c "$raw" > "$packed"
+            echo 'Source: lz4 compressed from shusky full-dist Image' > output/u35/U35_GKI_COMPRESSED_PROVENANCE.txt
+          fi
+          test -s "$packed"
+          lz4 -d -c "$packed" > u35/U35_LZ4_CROSSCHECK_TEMP
+          cmp "$raw" u35/U35_LZ4_CROSSCHECK_TEMP
+          rm -f u35/U35_LZ4_CROSSCHECK_TEMP
+          sha256sum "$raw" "$packed" > output/u35/U35_GKI_KERNEL_AND_PACKED_SHA256.txt
+          python3 u35/tools/mkbootimg/mkbootimg.py \
+            --header_version 4 --kernel "$packed" \
+            --output u35/boot-U35-LAB-NOT-FLASHABLE.img
+          python3 u35/tools/mkbootimg/mkbootimg.py \
+            --header_version 4 --ramdisk u35/U35-ARM64-STAGE0-initramfs.cpio.gz \
+            --output u35/init_boot-U35-LAB-NOT-FLASHABLE.img
+          python3 scripts/u35_verify_android_v4_lab.py \
+            --boot u35/boot-U35-LAB-NOT-FLASHABLE.img \
+            --init-boot u35/init_boot-U35-LAB-NOT-FLASHABLE.img \
+            --kernel "$raw" --compressed-kernel "$packed" \
+            --ramdisk u35/U35-ARM64-STAGE0-initramfs.cpio.gz \
+            --ubuntu-base-tar u35/ubuntu-base-26.04.1-base-arm64.tar.gz \
+            --rootfs-image u35/ubuntu-U35-LAB-NOT-USERDATA.img \
+            --busybox u35/initramfs/bin/busybox \
+            --out output/u35
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.md
+          cat output/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: U37 export U35 verified research binaries with explicit NO-FLASH manifests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -s output/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.json
+          python3 scripts/u37_export_research_artifacts.py \
+            --report output/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.json \
+            --lab u35 \
+            --dist shusky-src/out/shusky/dist \
+            --out output/u37-binaries
+          test -s output/u37-binaries/startup-images/boot.img
+          test -s output/u37-binaries/startup-images/init_boot.img
+          test -s output/u37-binaries/ubuntu-rootfs/ubuntu.img
+          grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u37-binaries/reports/U37_REPORT.md
+          cat output/u37-binaries/reports/U37_REPORT.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: U37 upload NON-FLASHABLE boot and vendor research images
+        uses: actions/upload-artifact@v4
+        with:
+          name: u37-STARTUP-BOOT-INIT_BOOT-NOT-FLASHABLE-${{ github.run_number }}
+          path: output/u37-binaries/startup-images/
+          retention-days: 21
+          compression-level: 6
+          if-no-files-found: error
+
+      - name: U37 upload Ubuntu Base ARM64 1 GiB ext4 rootfs (raw ubuntu.img compressed in ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: u37-UBUNTU-BASE-2604-ARM64-NOT-USERDATA-${{ github.run_number }}
+          path: output/u37-binaries/ubuntu-rootfs/
+          retention-days: 21
+          compression-level: 6
+          if-no-files-found: error
+
+      - name: U37 upload independent SHA256 manifest and U35 research evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: u37-RESEARCH-MANIFEST-NO-FLASH-${{ github.run_number }}
+          path: |
+            output/u37-binaries/reports/
+            output/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.json
+            output/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.md
+          retention-days: 21
+          if-no-files-found: error
+
+      - name: Preserve research diagnostic evidence only and discard build binaries
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          for name in U30_SOURCE_SYNC_FULL U30_KERNEL_SOURCE_BUILD_FULL U30_VENDOR_FULL_BUILD_FULL; do
+            file="output/u30-build/$name.log"
+            if [[ -f "$file" ]]; then
+              tail -n 600 "$file" > "output/u30-build/$name-TAIL.log"
+              rm -f "$file"
+            fi
+          done
+          df -h / || true
+          printf '%s\n' \
+            "U37 research-only binaries exported to temporary Actions artifacts. CP2A ABI, DTBO, AVB, Ubuntu handoff and boot unverified. NEVER FLASH." \
+            > output/u30-build/REAL_DEVICE_FLASH_GATE_DENY.txt
+
+      - name: Upload only source checks, Bazel failures, hashes and exit codes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u37-SOURCE-GKI-KMI-AUDIT-REPORT-NOT-FLASHABLE-${{ github.run_number }}
+          path: |
+            output/u30-build/
+            output/u31/
+            output/u32/
+            output/u33/
+            output/u35/
+          retention-days: 21
+          if-no-files-found: warn
