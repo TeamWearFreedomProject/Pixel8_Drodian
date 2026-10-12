@@ -396,7 +396,18 @@ jobs:
             -o Dir::Etc::sourceparts=- update -qq
           mkdir -p u35/pkgs u35/busybox-pkg u35/initramfs/bin u35/initramfs/dev u35/initramfs/proc u35/initramfs/sys u35/initramfs/run u35/initramfs/tmp u35/initramfs/mnt
           cd u35/pkgs
-          apt-get download busybox-static:arm64
+          # Use the exact same authenticated Resolute ARM64 source list for
+          # package resolution and download; Ubuntu 24.04 runner defaults
+          # otherwise cannot see packages indexed in the custom source list.
+          apt-cache \
+            -o Dir::Etc::sourcelist="$GITHUB_WORKSPACE/u35/ubuntu-arm64.list" \
+            -o Dir::Etc::sourceparts=- \
+            policy busybox-static:arm64 \
+            | tee "$GITHUB_WORKSPACE/output/u35/U35_UBUNTU_ARM64_BUSYBOX_APT_POLICY.txt"
+          apt-get \
+            -o Dir::Etc::sourcelist="$GITHUB_WORKSPACE/u35/ubuntu-arm64.list" \
+            -o Dir::Etc::sourceparts=- \
+            download busybox-static:arm64
           deb="$(find . -maxdepth 1 -name 'busybox-static_*_arm64.deb' -type f)"
           test -f "$deb"
           test "$(dpkg-deb -f "$deb" Architecture)" = arm64
@@ -499,34 +510,5 @@ jobs:
             output/u32/
             output/u33/
             output/u35/
-          retention-days: 21
-          if-no-files-found: warn
-      - name: Preserve research diagnostic evidence only and discard build binaries
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          for name in U30_SOURCE_SYNC_FULL U30_KERNEL_SOURCE_BUILD_FULL U30_VENDOR_FULL_BUILD_FULL; do
-            file="output/u30-build/$name.log"
-            if [[ -f "$file" ]]; then
-              tail -n 600 "$file" > "output/u30-build/$name-TAIL.log"
-              rm -f "$file"
-            fi
-          done
-          df -h / || true
-          printf '%s\n' \
-            "U33 4KiB images source research build only. Actual CP2A ABI, shiba DTBO, AVB and recovery unknown. NEVER FLASH." \
-            > output/u30-build/REAL_DEVICE_FLASH_GATE_DENY.txt
-
-      - name: Upload only source checks, Bazel failures, hashes and exit codes
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: u33-SOURCE-6157-MODULES-DIST-CRC-REPORT-NO-FLASH-${{ github.run_number }}
-          path: |
-            output/u30-build/
-            output/u31/
-            output/u32/
-            output/u33/
           retention-days: 21
           if-no-files-found: warn
