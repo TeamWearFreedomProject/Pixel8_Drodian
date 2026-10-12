@@ -54,11 +54,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils \
-            e2fsprogs curl ca-certificates ipxe-qemu
-          # On Ubuntu Noble, --no-install-recommends omits ipxe-qemu;
-          # without this dependency QEMU quits before guest firmware with
-          # 'failed to find romfile efi-virtio.rom'.
-          test -s /usr/share/qemu/efi-virtio.rom
+            e2fsprogs curl ca-certificates
+          # Ubuntu Noble's QEMU requires efi-virtio.rom by default but
+          # its minimal runner package set may not install that optional
+          # PCI option ROM. Disable that ROM lookup on each virtual PCI
+          # device; QEMU ARM EFI includes its native virtio support.
           test -s /usr/share/qemu-efi-aarch64/QEMU_EFI.fd
           qemu-system-aarch64 --version
 
@@ -191,14 +191,14 @@ jobs:
               -machine virt -cpu cortex-a72 -smp 2 -m 2048 \
               -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
               -display none -monitor none -serial stdio \
-              -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+              -netdev user,id=net0 -device virtio-net-pci,netdev=net0,romfile= \
               -device virtio-rng-pci \
               -drive if=none,id=disk,file=u36-test-overlay.qcow2,format=qcow2 \
-              -device virtio-blk-pci,drive=disk \
+              -device virtio-blk-pci,drive=disk,romfile= \
               -drive if=none,id=cloudseed,file=seed.img,format=raw,readonly=on \
-              -device virtio-blk-pci,drive=cloudseed \
+              -device virtio-blk-pci,drive=cloudseed,romfile= \
               -drive if=none,id=ubuntu_base_lab,file=u36-ubuntu-base-RO-LAB.img,format=raw,readonly=on \
-              -device virtio-blk-pci,drive=ubuntu_base_lab \
+              -device virtio-blk-pci,drive=ubuntu_base_lab,romfile= \
             > u36-qemu-full-serial.log 2>&1
           rc=$?
           echo "$rc" > "$GITHUB_WORKSPACE/output/u36/U36_QEMU_REAL_EXIT.txt"
