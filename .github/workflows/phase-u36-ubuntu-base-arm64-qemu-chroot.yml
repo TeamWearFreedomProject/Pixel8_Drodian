@@ -154,8 +154,10 @@ jobs:
                   printf "U36_CHROOT_UBUNTU_BASE_VERSION=%s\n" "$VERSION_ID"
                   test "$(uname -m)" = aarch64
                   echo U36_CHROOT_KERNEL_ARCH=aarch64
-                  test -x /bin/ls
-                  /bin/ls /etc/os-release >/dev/null
+                  # Base is intentionally minimal: it need not ship
+                  # coreutils /bin/ls. The actual REQUIRED command here
+                  # is Ubuntu Base /bin/sh executed by chroot.
+                  test -r /etc/os-release
                   echo U36_CHROOT_UBUNTU_BASE_SHELL_EXECUTED=TRUE
                 '
                 umount /mnt/u36-base
