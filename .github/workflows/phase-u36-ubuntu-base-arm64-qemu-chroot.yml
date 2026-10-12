@@ -1,0 +1,236 @@
+name: U36 verify Canonical Ubuntu Base ARM64 chroot in real QEMU guest (NO PHONE)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/phase-u36-ubuntu-base-arm64-qemu-chroot.yml
+      - scripts/u36_rootfs_chroot_gate.py
+      - PHASE_U36.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: u36-ubuntu-arm64-rootfs-qemu-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ubuntu-base-arm64-readonly-chroot:
+    name: Generic ARM64 VM boot; mount & execute Ubuntu Base 26.04 shell (NOT Pixel8)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read immutable U35 research result and enforce its no-flash warning
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 38196600339
+          name: u35-UBUNTU-ARM64-BOOTV4-STAGE0-REPORT-NOT-FLASHABLE-5
+          path: evidence/u35-run-38196600339
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Gate U35 report and prepare generic QEMU (without compiling vendor kernel)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p output/u36 u36-rootfs u36-vm
+          python3 -m py_compile scripts/u36_rootfs_chroot_gate.py
+          test -s evidence/u35-run-38196600339/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          r=json.loads(Path("evidence/u35-run-38196600339/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.json").read_text())
+          assert r["phase"]=="U35"
+          assert r["status"]=="EXPERIMENTAL_BOOT_INITBOOT_AND_UBUNTU_BASE_PACKAGING_OFFLINE_PASS"
+          assert r["physical_Pixel8_flash_gate"]=="DENY"
+          assert r["hardware_boot_verified"] is False
+          assert r["Ubuntu_Base_26_04_ARM64_official_tar_sha256"]=="5a1906794ced63a71a8119c3f211ef5f0bbe0a243001b4bbd41fdf80c5b219fd"
+          print("Exact immutable U35 CI evidence PIN PASS. Physical device DENY.")
+          PY
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils \
+            e2fsprogs curl ca-certificates
+          test -s /usr/share/qemu-efi-aarch64/QEMU_EFI.fd
+          qemu-system-aarch64 --version
+
+      - name: Reobtain byte-identical officially published Ubuntu Base 26.04.1 arm64
+        shell: bash
+        run: |
+          set -euxo pipefail
+          base=https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release
+          archive=ubuntu-base-26.04.1-base-arm64.tar.gz
+          curl -fL --retry 4 --connect-timeout 30 \
+            "$base/SHA256SUMS" -o u36-vm/BASE_SHA256SUMS
+          grep -E '[[:space:]]\*?ubuntu-base-26[.]04[.]1-base-arm64[.]tar[.]gz$' \
+            u36-vm/BASE_SHA256SUMS > u36-vm/U36_BASE_SHA256SUMS_ONLY
+          test "$(wc -l < u36-vm/U36_BASE_SHA256SUMS_ONLY)" -eq 1
+          curl -fL --retry 4 --connect-timeout 30 --max-time 900 \
+            "$base/$archive" -o "u36-vm/$archive"
+          ( cd u36-vm && sha256sum --check U36_BASE_SHA256SUMS_ONLY )
+          digest="$(sha256sum "u36-vm/$archive" | cut -d ' ' -f1)"
+          test "$digest" = 5a1906794ced63a71a8119c3f211ef5f0bbe0a243001b4bbd41fdf80c5b219fd
+          printf '%s\n' "$digest" > output/u36/U36_UBUNTU_BASE_SHA256.txt
+          tar -xzf "u36-vm/$archive" --no-same-owner -C u36-rootfs
+          grep -Eq '^VERSION_ID="?26[.]04' u36-rootfs/etc/os-release
+          test -e u36-rootfs/bin/sh || test -e u36-rootfs/usr/bin/sh
+          truncate -s 768M u36-vm/u36-ubuntu-base-RO-LAB.img
+          mkfs.ext4 -F -q -L U36_UBUNTU_LAB \
+            -d u36-rootfs u36-vm/u36-ubuntu-base-RO-LAB.img
+          tune2fs -l u36-vm/u36-ubuntu-base-RO-LAB.img \
+            | grep -E 'Filesystem volume name|Block count|Block size|Filesystem state' \
+            > output/u36/U36_EXT4_STRUCTURE.txt
+          test -s output/u36/U36_EXT4_STRUCTURE.txt
+
+      - name: Obtain official 26.04 ARM64 cloud VM kernel/system image with SHA256 verification
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd u36-vm
+          base=https://cloud-images.ubuntu.com/releases/resolute/release
+          image=ubuntu-26.04-server-cloudimg-arm64.img
+          curl -fL --retry 4 --connect-timeout 30 "$base/SHA256SUMS" -o CLOUD_SHA256SUMS
+          grep -E '[[:space:]]\*?ubuntu-26[.]04-server-cloudimg-arm64[.]img$' \
+            CLOUD_SHA256SUMS > CLOUD_IMAGE_ONLY_SHA256SUMS
+          test "$(wc -l < CLOUD_IMAGE_ONLY_SHA256SUMS)" -eq 1
+          curl -fL --retry 5 --connect-timeout 30 --max-time 1500 \
+            "$base/$image" -o "$image"
+          sha256sum --check CLOUD_IMAGE_ONLY_SHA256SUMS
+          sha256sum "$image" | cut -d ' ' -f1 \
+            > "$GITHUB_WORKSPACE/output/u36/U36_QEMU_CLOUD_IMG_SHA256.txt"
+          qemu-img info --output=json "$image" \
+            > "$GITHUB_WORKSPACE/output/u36/U36_QEMU_CLOUD_IMAGE_INFO.json"
+          test "$(qemu-img info --output=json "$image" | python3 -c 'import json,sys;print(json.load(sys.stdin)["format"])')" = qcow2
+          df -h /
+
+      - name: Build cloud-init serial witness for read-only lab ext4 mount and a REAL arm64 Ubuntu Base shell
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd u36-vm
+          cat > user-data <<'CLOUDCFG'
+          #cloud-config
+          hostname: u36-generic-arm64-guest
+          package_update: false
+          package_upgrade: false
+          ssh_pwauth: false
+          disable_root: true
+          bootcmd:
+            - [sh, -c, 'echo U36_GUEST_BOOTCMD_REACHED >/dev/ttyAMA0']
+          write_files:
+            - path: /usr/local/sbin/u36-guest-verify
+              permissions: '0755'
+              owner: root:root
+              content: |
+                #!/bin/sh
+                set -eu
+                arch="$(uname -m)"
+                printf 'U36_GUEST_KERNEL_ARCH=%s\n' "$arch"
+                test "$arch" = aarch64
+                mkdir -p /mnt/u36-base
+                device="$(blkid -L U36_UBUNTU_LAB)"
+                test -b "$device"
+                mount -t ext4 -o ro "$device" /mnt/u36-base
+                opts="$(findmnt -n -o OPTIONS /mnt/u36-base)"
+                case ",$opts," in
+                  *,ro,*) echo U36_GUEST_LAB_ROOT_MOUNT_READONLY=TRUE ;;
+                  *) echo U36_GUEST_LAB_ROOT_MOUNT_READONLY=FALSE; exit 30 ;;
+                esac
+                test -x /mnt/u36-base/bin/sh || test -x /mnt/u36-base/usr/bin/sh
+                # Observe actual commands executed from the separately-mounted
+                # Canonical Ubuntu Base filesystem, not the cloud guest root.
+                chroot /mnt/u36-base /bin/sh -c '
+                  set -eu
+                  . /etc/os-release
+                  test "$VERSION_ID" = "26.04"
+                  printf "U36_CHROOT_UBUNTU_BASE_VERSION=%s\n" "$VERSION_ID"
+                  test "$(uname -m)" = aarch64
+                  echo U36_CHROOT_KERNEL_ARCH=aarch64
+                  test -x /bin/ls
+                  /bin/ls /etc/os-release >/dev/null
+                  echo U36_CHROOT_UBUNTU_BASE_SHELL_EXECUTED=TRUE
+                '
+                umount /mnt/u36-base
+                echo U36_GUEST_AFTER_CHROOT_SUCCESS
+          runcmd:
+            - [sh, -c, '/usr/local/sbin/u36-guest-verify >/dev/ttyAMA0 2>&1']
+          power_state:
+            mode: poweroff
+            delay: now
+            timeout: 90
+            condition: true
+          CLOUDCFG
+          cat > meta-data <<'METADATA'
+          instance-id: u36-ubuntu-base-arm64-readonly-chroot
+          local-hostname: u36-generic-arm64-guest
+          METADATA
+          cloud-localds seed.img user-data meta-data
+          qemu-img create -f qcow2 \
+            -F qcow2 -b "$(pwd)/ubuntu-26.04-server-cloudimg-arm64.img" \
+            u36-test-overlay.qcow2 8G
+          test -s u36-test-overlay.qcow2
+          test -s u36-ubuntu-base-RO-LAB.img
+          test -s seed.img
+
+      - name: Boot generic QEMU ARM64 Ubuntu cloud guest and EXECUTE LAB rootfs shell
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd u36-vm
+          set +e
+          timeout --signal=TERM --kill-after=35s 27m \
+            qemu-system-aarch64 \
+              -machine virt -cpu cortex-a72 -smp 2 -m 2048 \
+              -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+              -display none -monitor none -serial stdio \
+              -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
+              -device virtio-rng-pci \
+              -drive if=none,id=disk,file=u36-test-overlay.qcow2,format=qcow2 \
+              -device virtio-blk-pci,drive=disk \
+              -drive if=none,id=cloudseed,file=seed.img,format=raw,readonly=on \
+              -device virtio-blk-pci,drive=cloudseed \
+              -drive if=none,id=ubuntu_base_lab,file=u36-ubuntu-base-RO-LAB.img,format=raw,readonly=on \
+              -device virtio-blk-pci,drive=ubuntu_base_lab \
+            > u36-qemu-full-serial.log 2>&1
+          rc=$?
+          echo "$rc" > "$GITHUB_WORKSPACE/output/u36/U36_QEMU_REAL_EXIT.txt"
+          printf 'QEMU arm64 actual exit: %s\n' "$rc"
+          grep -E 'U36_|Linux version|cloud-init.*finished' \
+            u36-qemu-full-serial.log | tail -n 45 || true
+          cd "$GITHUB_WORKSPACE"
+          python3 scripts/u36_rootfs_chroot_gate.py \
+            --serial-log u36-vm/u36-qemu-full-serial.log \
+            --exit-code output/u36/U36_QEMU_REAL_EXIT.txt \
+            --u35-evidence evidence/u35-run-38196600339/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.json \
+            --base-tar u36-vm/ubuntu-base-26.04.1-base-arm64.tar.gz \
+            --qemu-cloud-sha output/u36/U36_QEMU_CLOUD_IMG_SHA256.txt \
+            --qemu-cloud-info output/u36/U36_QEMU_CLOUD_IMAGE_INFO.json \
+            --out output/u36
+          cat output/u36/U36_QEMU_ARM64_BASE_READONLY_CHROOT_SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish only exact QEMU serial witness lines and hashes even if guest check fails
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if test -f u36-vm/u36-qemu-full-serial.log; then
+            grep -E 'U36_GUEST_|U36_CHROOT_' u36-vm/u36-qemu-full-serial.log \
+              | tail -n 70 > output/u36/U36_SERIAL_WITNESS_ONLY.txt || true
+            rm -f u36-vm/u36-qemu-full-serial.log
+          fi
+          printf '%s\n' \
+            'Cloud guest kernel is official Ubuntu generic ARM64; lab rootfs is a separate read-only virtual disk. NO initramfs PID1 or switch_root verification. NO Pixel8 shiba hardware simulation. REAL DEVICE FLASH GATE: DENY.' \
+            > output/u36/NO_PIXEL8_FLASH_GATE.txt
+
+      - name: Upload reports/log witnesses only; never upload a disk or flash image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u36-GENERIC-QEMU-UBUNTU-BASE-ARM64-CHROOT-WITNESS-NOT-FLASHABLE-${{ github.run_number }}
+          path: output/u36/
+          retention-days: 21
+          if-no-files-found: warn
