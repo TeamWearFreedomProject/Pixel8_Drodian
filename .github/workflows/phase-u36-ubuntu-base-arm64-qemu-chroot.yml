@@ -54,7 +54,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             qemu-system-arm qemu-efi-aarch64 qemu-utils cloud-image-utils \
-            e2fsprogs curl ca-certificates
+            e2fsprogs curl ca-certificates ipxe-qemu
+          # On Ubuntu Noble, --no-install-recommends omits ipxe-qemu;
+          # without this dependency QEMU quits before guest firmware with
+          # 'failed to find romfile efi-virtio.rom'.
+          test -s /usr/share/qemu/efi-virtio.rom
           test -s /usr/share/qemu-efi-aarch64/QEMU_EFI.fd
           qemu-system-aarch64 --version
 
@@ -207,6 +211,9 @@ jobs:
           grep -E 'U36_|Linux version|cloud-init.*finished' \
             u36-qemu-full-serial.log | tail -n 45 || true
           cd "$GITHUB_WORKSPACE"
+          # Fail CLOSED: don't accidentally report SUCCESS after the Python
+          # audit exits nonzero. Only the QEMU invocation may set +e.
+          set -e
           python3 scripts/u36_rootfs_chroot_gate.py \
             --serial-log u36-vm/u36-qemu-full-serial.log \
             --exit-code output/u36/U36_QEMU_REAL_EXIT.txt \
