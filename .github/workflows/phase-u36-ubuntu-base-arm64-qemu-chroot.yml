@@ -199,6 +199,11 @@ jobs:
           rc=$?
           echo "$rc" > "$GITHUB_WORKSPACE/output/u36/U36_QEMU_REAL_EXIT.txt"
           printf 'QEMU arm64 actual exit: %s\n' "$rc"
+          # Preserve any QEMU parse/EFI launch error in ordinary CI logs:
+          # a nonzero exit with empty guest markers must not be masked.
+          echo '--- U36 actual QEMU serial/stderr tail ---'
+          tail -n 85 u36-qemu-full-serial.log || true
+          echo '--- end QEMU stderr tail ---'
           grep -E 'U36_|Linux version|cloud-init.*finished' \
             u36-qemu-full-serial.log | tail -n 45 || true
           cd "$GITHUB_WORKSPACE"
@@ -220,6 +225,8 @@ jobs:
           if test -f u36-vm/u36-qemu-full-serial.log; then
             grep -E 'U36_GUEST_|U36_CHROOT_' u36-vm/u36-qemu-full-serial.log \
               | tail -n 70 > output/u36/U36_SERIAL_WITNESS_ONLY.txt || true
+            tail -n 85 u36-vm/u36-qemu-full-serial.log \
+              > output/u36/U36_GUEST_OR_QEMU_ERROR_LAST85.txt || true
             rm -f u36-vm/u36-qemu-full-serial.log
           fi
           printf '%s\n' \
