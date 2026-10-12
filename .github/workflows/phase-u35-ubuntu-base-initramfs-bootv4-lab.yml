@@ -365,37 +365,7 @@ jobs:
           base=https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release
           archive=ubuntu-base-26.04.1-base-arm64.tar.gz
           curl -fL --retry 4 --connect-timeout 30 "$base/SHA256SUMS" -o u35/SHA256SUMS
-          grep -E '[[:space:]]\*?ubuntu-base-26[.]04[.]1-base-arm64[.]tar[.]gz
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          for name in U30_SOURCE_SYNC_FULL U30_KERNEL_SOURCE_BUILD_FULL U30_VENDOR_FULL_BUILD_FULL; do
-            file="output/u30-build/$name.log"
-            if [[ -f "$file" ]]; then
-              tail -n 600 "$file" > "output/u30-build/$name-TAIL.log"
-              rm -f "$file"
-            fi
-          done
-          df -h / || true
-          printf '%s\n' \
-            "U35 Ubuntu Base and Android boot/init_boot v4 lab ONLY. Stock CP2A ABI, shiba DTBO, AVB, rootfs handoff and recovery unknown. NEVER FLASH." \
-            > output/u30-build/REAL_DEVICE_FLASH_GATE_DENY.txt
-
-      - name: Upload only source checks, Bazel failures, hashes and exit codes
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: u35-UBUNTU-ARM64-BOOTV4-STAGE0-REPORT-NOT-FLASHABLE-${{ github.run_number }}
-          path: |
-            output/u30-build/
-            output/u31/
-            output/u32/
-            output/u33/
-            output/u35/
-          retention-days: 21
-          if-no-files-found: warn
- \
+          grep -E '[[:space:]]\*?ubuntu-base-26[.]04[.]1-base-arm64[.]tar[.]gz$' \
             u35/SHA256SUMS > u35/BASE_SHA256SUMS_ONLY
           test "$(wc -l < u35/BASE_SHA256SUMS_ONLY)" -eq 1
           curl -fL --retry 4 --connect-timeout 30 --max-time 1000 \
@@ -501,6 +471,36 @@ jobs:
           grep -Fq 'REAL DEVICE FLASH GATE: DENY' output/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.md
           cat output/u35/U35_OFFLINE_BOOTV4_UBUNTU_LAB_REPORT.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Preserve research diagnostic evidence only and discard build binaries
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          for name in U30_SOURCE_SYNC_FULL U30_KERNEL_SOURCE_BUILD_FULL U30_VENDOR_FULL_BUILD_FULL; do
+            file="output/u30-build/$name.log"
+            if [[ -f "$file" ]]; then
+              tail -n 600 "$file" > "output/u30-build/$name-TAIL.log"
+              rm -f "$file"
+            fi
+          done
+          df -h / || true
+          printf '%s\n' \
+            "U35 Ubuntu Base and boot/init_boot v4 research laboratory only. CP2A ABI, DTBO, AVB and rootfs handoff unknown. NEVER FLASH." \
+            > output/u30-build/REAL_DEVICE_FLASH_GATE_DENY.txt
+
+      - name: Upload only source checks, Bazel failures, hashes and exit codes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: u35-UBUNTU-ARM64-BOOTV4-STAGE0-REPORT-NOT-FLASHABLE-${{ github.run_number }}
+          path: |
+            output/u30-build/
+            output/u31/
+            output/u32/
+            output/u33/
+            output/u35/
+          retention-days: 21
+          if-no-files-found: warn
       - name: Preserve research diagnostic evidence only and discard build binaries
         if: always()
         shell: bash
