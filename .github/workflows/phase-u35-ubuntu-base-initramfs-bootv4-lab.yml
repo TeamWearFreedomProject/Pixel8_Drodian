@@ -430,8 +430,12 @@ jobs:
           test -s u35/U35-ARM64-STAGE0-initramfs.cpio.gz
           gzip -dc u35/U35-ARM64-STAGE0-initramfs.cpio.gz \
             | cpio --quiet -t > output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
-          grep -Fxq './init' output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
-          grep -Fxq './bin/busybox' output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
+          # GNU cpio normalizes leading "./" away on archive listing;
+          # the exact previously uploaded Run #4 member list contains
+          # "init" and "bin/busybox", not "./init" and "./bin/busybox".
+          grep -Fxq 'init' output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
+          grep -Fxq 'bin/busybox' output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
+          grep -Fxq 'bin/sh' output/u35/U35_STAGE0_CPIO_MEMBER_LIST.txt
           truncate -s 1024M u35/ubuntu-U35-LAB-NOT-USERDATA.img
           mkfs.ext4 -F -q -L U35_UBUNTU_LAB \
             -d u35/rootfs u35/ubuntu-U35-LAB-NOT-USERDATA.img
@@ -459,11 +463,23 @@ jobs:
           assert a["real_device_flash_gate"]=="DENY"
           PY
           raw=shusky-src/out/shusky/dist/Image
+          test -s "$raw"
+          # The verified source Image always comes from the actual full
+          # shusky dist. If Bazel has not exported Image.lz4 to the dist,
+          # explicitly compress THAT verified source Image for the lab.
           packed=shusky-src/out/shusky/dist/Image.lz4
-          test -s "$raw" && test -s "$packed"
+          if test -s "$packed"; then
+            echo 'Source: verified shusky dist Image.lz4' > output/u35/U35_GKI_COMPRESSED_PROVENANCE.txt
+          else
+            packed=u35/U35_FROM_VERIFIED_SOURCE_GKI_Image.lz4
+            lz4 -9 -c "$raw" > "$packed"
+            echo 'Source: lz4 compressed from shusky full-dist Image' > output/u35/U35_GKI_COMPRESSED_PROVENANCE.txt
+          fi
+          test -s "$packed"
           lz4 -d -c "$packed" > u35/U35_LZ4_CROSSCHECK_TEMP
           cmp "$raw" u35/U35_LZ4_CROSSCHECK_TEMP
           rm -f u35/U35_LZ4_CROSSCHECK_TEMP
+          sha256sum "$raw" "$packed" > output/u35/U35_GKI_KERNEL_AND_PACKED_SHA256.txt
           python3 u35/tools/mkbootimg/mkbootimg.py \
             --header_version 4 --kernel "$packed" \
             --output u35/boot-U35-LAB-NOT-FLASHABLE.img
